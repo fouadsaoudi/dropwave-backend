@@ -233,8 +233,8 @@ class ProcessWebhookJob implements ShouldQueue
         $newStatusWeight = $statusWeights[$newStatus] ?? 0;
 
         $updateData = [];
-        // Only progress the status string forward, never regress
-        if ($newStatusWeight > $currentStatusWeight) {
+        // Only progress the status string forward, never regress, unless failed (terminal state)
+        if ($newStatus === 'failed' || $newStatusWeight > $currentStatusWeight) {
             $updateData['status'] = $newStatus;
         }
 

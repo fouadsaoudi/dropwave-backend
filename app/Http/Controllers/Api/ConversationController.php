@@ -314,4 +314,167 @@ class ConversationController extends Controller
             'conversation' => $conversation
         ]);
     }
+
+    /**
+     * Send a template message to start a new chat or respond in an existing one.
+     */
+    public function sendTemplate(Request $request)
+    {
+        $request->validate([
+            'template_id' => 'required|exists:message_templates,id',
+            'phone_number' => 'nullable|string|max:30',
+            'conversation_id' => 'nullable|integer|exists:conversations,id',
+            'variables' => 'nullable|array',
+        ]);
+
+        $tenantId = Auth::user()->tenant_id;
+        $template = \App\Models\MessageTemplate::find($request->template_id);
+
+        if ($template->tenant_id !== $tenantId) {
+            return response()->json([
+                'error' => 'unauthorized',
+                'message' => 'Unauthorized template request.'
+            ], 403);
+        }
+
+        $conversation = null;
+        $contact = null;
+
+        if ($request->has('conversation_id') && !empty($request->conversation_id)) {
+            $conversation = \App\Models\Conversation::find($request->conversation_id);
+            if ($conversation->tenant_id !== $tenantId) {
+                return response()->json([
+                    'error' => 'unauthorized',
+                    'message' => 'Unauthorized conversation access.'
+                ], 403);
+            }
+            $contact = $conversation->contact;
+        } elseif ($request->has('phone_number') && !empty($request->phone_number)) {
+            // Standardize phone number format
+            $phone = preg_replace('/[^\d+]/', '', $request->phone_number);
+            if (!str_starts_with($phone, '+') && preg_match('/^\d/', $phone)) {
+                $phone = '+' . $phone;
+            }
+
+            // Find or create Contact
+            $contact = \App\Models\Contact::withoutGlobalScopes()->where([
+                'tenant_id' => $tenantId,
+                'phone_number' => $phone,
+            ])->first();
+
+            if (!$contact) {
+                $contact = \App\Models\Contact::create([
+                    'tenant_id' => $tenantId,
+                    'phone_number' => $phone,
+                    'added_via' => 'manual',
+                ]);
+            }
+
+            // Find or create Conversation
+            $conversation = \App\Models\Conversation::withoutGlobalScopes()->where([
+                'tenant_id' => $tenantId,
+                'contact_id' => $contact->id,
+                'channel_id' => $template->channel_id,
+            ])->first();
+
+            if (!$conversation) {
+                $conversation = \App\Models\Conversation::create([
+                    'tenant_id' => $tenantId,
+                    'contact_id' => $contact->id,
+                    'channel_id' => $template->channel_id,
+                    'status' => 'open',
+                    'assigned_to' => Auth::id(),
+                    'assigned_at' => now(),
+                    'unread_count' => 0,
+                ]);
+            }
+        } else {
+            return response()->json([
+                'error' => 'missing_parameters',
+                'message' => 'Either phone_number or conversation_id must be provided.'
+            ], 422);
+        }
+
+        $channel = $template->channel;
+
+        // Compile components parameters for Meta API
+        $components = [];
+        if (!empty($request->variables)) {
+            $params = [];
+            foreach ($request->variables as $varValue) {
+                $params[] = [
+                    'type' => 'text',
+                    'text' => (string) $varValue,
+                ];
+            }
+            $components[] = [
+                'type' => 'body',
+                'parameters' => $params,
+            ];
+        }
+
+        try {
+            $langCode = $template->language;
+            
+            // 1. Send template using Meta API
+            $metaResponse = $this->metaService->sendTemplateMessage(
+                $channel->decrypted_token,
+                $channel->phone_number_id,
+                $contact->phone_number,
+                $template->name,
+                $langCode,
+                $components
+            );
+
+            $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+
+            // Substitute variables in the body text for local display readability
+            $msgBody = $template->body;
+            if (!empty($request->variables)) {
+                foreach ($request->variables as $index => $value) {
+                    $placeholder = '{{' . ($index + 1) . '}}';
+                    $msgBody = str_replace($placeholder, $value, $msgBody);
+                }
+            }
+
+            // 2. Save outbound message record in database
+            $message = \App\Models\Message::create([
+                'tenant_id' => $tenantId,
+                'conversation_id' => $conversation->id,
+                'direction' => 'outbound',
+                'type' => 'text',
+                'body' => $msgBody,
+                'template_id' => $template->id,
+                'whatsapp_msg_id' => $whatsappMsgId,
+                'status' => 'sent',
+                'sent_by' => Auth::id(),
+                'sent_at' => now(),
+            ]);
+
+            // 3. Update conversation timeline details
+            $conversation->update([
+                'status' => 'open', // Ensure it opens/reopens if closed
+                'last_message_body' => $msgBody,
+                'last_message_at' => now(),
+                'window_expires_at' => now()->addHours(24), // Reset the 24h window expires time
+            ]);
+
+            // 4. Broadcast live socket events
+            $conversation->load(['contact', 'channel', 'assignee']);
+            broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
+            broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+
+            return response()->json([
+                'message' => 'Template message sent successfully.',
+                'conversation' => $conversation,
+                'chat_message' => $message,
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'error' => 'send_failed',
+                'message' => 'Failed to transmit template message: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

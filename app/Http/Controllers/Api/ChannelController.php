@@ -124,4 +124,45 @@ class ChannelController extends Controller
 
         return response()->json($channels);
     }
+
+    /**
+     * Override WABA webhook subscription for developers.
+     */
+    public function overrideWebhook(Request $request, $id)
+    {
+        $request->validate([
+            'callback_uri' => 'required|url',
+            'verify_token' => 'required|string|max:255',
+        ]);
+
+        $tenantId = $request->get('tenant_id');
+        $channel = WabaChannel::where('tenant_id', $tenantId)->find($id);
+
+        if (!$channel) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Channel not found or unauthorized.'
+            ], 404);
+        }
+
+        try {
+            $response = $this->metaService->overrideWabaWebhook(
+                $channel->waba_id,
+                $channel->decrypted_token,
+                $request->callback_uri,
+                $request->verify_token
+            );
+
+            return response()->json([
+                'message' => 'WABA webhook callback overridden successfully on Meta API.',
+                'meta_response' => $response,
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'error' => 'override_failed',
+                'message' => 'Failed to override WABA webhook: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

@@ -26,6 +26,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     // Channels
     Route::get('/channels', [ChannelController::class, 'index']);
     Route::post('/channels/connect', [ChannelController::class, 'connect']);
+    Route::post('/channels/{id}/override-webhook', [ChannelController::class, 'overrideWebhook']);
 
     // Conversations
     Route::get('/conversations', [ConversationController::class, 'index']);
@@ -36,12 +37,23 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/reopen', [ConversationController::class, 'reopen']);
     Route::post('/conversations/{id}/messages', [ConversationController::class, 'sendMessage']);
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
+    Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);
 
     // Contacts
+    Route::get('/contacts', [\App\Http\Controllers\Api\ContactController::class, 'index']);
+    Route::post('/contacts', [\App\Http\Controllers\Api\ContactController::class, 'store']);
     Route::put('/contacts/{id}', [\App\Http\Controllers\Api\ContactController::class, 'update']);
+    Route::delete('/contacts/{id}', [\App\Http\Controllers\Api\ContactController::class, 'destroy']);
+    Route::post('/contacts/import', [\App\Http\Controllers\Api\ContactController::class, 'import']);
     Route::get('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'index']);
     Route::post('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'store']);
     Route::delete('/addresses/{id}', [\App\Http\Controllers\Api\AddressController::class, 'destroy']);
+
+    // Templates
+    Route::get('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'index']);
+    Route::post('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'store']);
+    Route::delete('/templates/{id}', [\App\Http\Controllers\Api\TemplateController::class, 'destroy']);
+    Route::post('/templates/sync', [\App\Http\Controllers\Api\TemplateController::class, 'sync']);
 
     // Admin
     Route::get('/admin/tenants', [AdminController::class, 'listTenants']);

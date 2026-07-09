@@ -194,6 +194,29 @@ class MetaApiService
     }
 
     /**
+     * Override the webhook callback URI and verify token for WABA events.
+     */
+    public function overrideWabaWebhook(string $wabaId, string $accessToken, string $callbackUri, string $verifyToken): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}/subscribed_apps";
+
+        $response = Http::withToken($accessToken)->post($url, [
+            'override_callback_uri' => $callbackUri,
+            'verify_token' => $verifyToken,
+        ]);
+
+        if ($response->failed()) {
+            Log::error("Failed to override WABA {$wabaId} webhook", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API WABA webhook override failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Mark a received message as read.
      */
     public function markMessageAsRead(string $accessToken, string $phoneNumberId, string $messageId): array
@@ -212,6 +235,68 @@ class MetaApiService
                 'status' => $response->status(),
             ]);
             throw new Exception('Meta API mark message as read failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Submit a new message template to Meta for approval.
+     */
+    public function submitMessageTemplate(string $accessToken, string $wabaId, array $payload): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}/message_templates";
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error("Failed to submit WhatsApp message template to WABA {$wabaId}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API template submission failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Fetch templates for a given WABA account from Meta.
+     */
+    public function fetchMessageTemplates(string $accessToken, string $wabaId): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}/message_templates";
+
+        $response = Http::withToken($accessToken)->get($url);
+
+        if ($response->failed()) {
+            Log::error("Failed to fetch WhatsApp message templates for WABA {$wabaId}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API fetch templates failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Delete a message template from Meta.
+     */
+    public function deleteMessageTemplate(string $accessToken, string $wabaId, string $templateName): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}/message_templates";
+
+        $response = Http::withToken($accessToken)->delete($url, [
+            'name' => $templateName,
+        ]);
+
+        if ($response->failed()) {
+            Log::error("Failed to delete WhatsApp message template {$templateName} from WABA {$wabaId}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API template deletion failed: ' . $response->body());
         }
 
         return $response->json();

@@ -185,7 +185,7 @@ class ProcessWebhookJob implements ShouldQueue
             $lat = $msg['location']['latitude'] ?? null;
             $lng = $msg['location']['longitude'] ?? null;
 
-            Message::withoutGlobalScopes()->create([
+            $message = Message::withoutGlobalScopes()->create([
                 'tenant_id' => $channel->tenant_id,
                 'conversation_id' => $conversation->id,
                 'direction' => 'inbound',
@@ -198,8 +198,9 @@ class ProcessWebhookJob implements ShouldQueue
                 'sent_at' => $timestamp,
             ]);
 
-            // TODO: Dispatch download media job if media fields are set
-            // TODO: Broadcast Echo/Reverb NewMessageReceived event
+            // Broadcast Echo/Reverb events
+            broadcast(new \App\Events\MessageBroadcasted($message));
+            broadcast(new \App\Events\ConversationUpdated($conversation));
         });
     }
 
@@ -253,9 +254,8 @@ class ProcessWebhookJob implements ShouldQueue
 
         if (!empty($updateData)) {
             $message->update($updateData);
+            broadcast(new \App\Events\MessageBroadcasted($message));
         }
-
-        // TODO: Broadcast Echo/Reverb MessageStatusUpdated event
     }
 
     /**

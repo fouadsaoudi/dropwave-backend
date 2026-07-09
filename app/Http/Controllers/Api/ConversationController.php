@@ -120,9 +120,12 @@ class ConversationController extends Controller
             'status' => 'open'
         ]);
 
+        $conversation->load(['contact', 'channel', 'assignee']);
+        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+
         return response()->json([
             'message' => 'Conversation claimed successfully.',
-            'conversation' => $conversation->load(['contact', 'channel', 'assignee'])
+            'conversation' => $conversation
         ]);
     }
 
@@ -146,9 +149,12 @@ class ConversationController extends Controller
             'resolved_at' => now()
         ]);
 
+        $conversation->load(['contact', 'channel', 'assignee']);
+        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+
         return response()->json([
             'message' => 'Conversation resolved successfully.',
-            'conversation' => $conversation->load(['contact', 'channel', 'assignee'])
+            'conversation' => $conversation
         ]);
     }
 
@@ -172,9 +178,12 @@ class ConversationController extends Controller
             'resolved_at' => null
         ]);
 
+        $conversation->load(['contact', 'channel', 'assignee']);
+        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+
         return response()->json([
             'message' => 'Conversation reopened successfully.',
-            'conversation' => $conversation->load(['contact', 'channel', 'assignee'])
+            'conversation' => $conversation
         ]);
     }
 
@@ -232,6 +241,10 @@ class ConversationController extends Controller
                 'last_message_body' => $request->body,
                 'last_message_at' => now(),
             ]);
+
+            // 5. Broadcast message & conversation updates
+            broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
+            broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
 
             return response()->json($message);
 
@@ -292,6 +305,9 @@ class ConversationController extends Controller
             ->where('direction', 'inbound')
             ->where('status', '!=', 'read')
             ->update(['status' => 'read']);
+
+        $conversation->load(['contact', 'channel', 'assignee']);
+        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
 
         return response()->json([
             'message' => 'Conversation marked as read.',

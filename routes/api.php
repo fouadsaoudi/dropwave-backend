@@ -10,6 +10,9 @@ use App\Http\Controllers\Api\ConversationController;
 
 // Public routes
 Route::post('/auth/login', [AuthController::class, 'login']);
+Route::get('/health', function () {
+    return response()->json(['status' => 'ok']);
+});
 
 // Meta Webhooks
 Route::get('/webhooks/meta', [WebhookController::class, 'verify']);

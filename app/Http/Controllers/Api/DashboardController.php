@@ -7,18 +7,27 @@ use Illuminate\Http\Request;
 use App\Models\WabaChannel;
 use App\Models\Message;
 use App\Models\Conversation;
-use App\Models\MessageTemplate;
+use App\Models\Tenant;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use App\Services\TenantBillingService;
 
 class DashboardController extends Controller
 {
     /**
      * Get aggregated metrics and cost estimations for the tenant.
      */
-    public function getStats(Request $request)
+    public function getStats(Request $request, TenantBillingService $billingService)
     {
         $tenantId = $request->get('tenant_id');
+        $tenant = Tenant::find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'tenant_not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
         
         $allTimeQuery = $request->query('all_time');
         
@@ -66,70 +75,6 @@ class DashboardController extends Controller
             ->where('unread_count', '>', 0)
             ->count();
 
-        // Helper function to compile billing cost parameters for any date range
-        $compileBillingForRange = function ($start, $end) use ($tenantId) {
-            $marketingCount = Message::where('messages.tenant_id', $tenantId)
-                ->where('messages.direction', 'outbound')
-                ->whereBetween('messages.created_at', [$start, $end])
-                ->whereNull('messages.error_code')
-                ->join('message_templates', 'messages.template_id', '=', 'message_templates.id')
-                ->where('message_templates.category', 'MARKETING')
-                ->distinct('messages.conversation_id')
-                ->count('messages.conversation_id');
-
-            $utilityCount = Message::where('messages.tenant_id', $tenantId)
-                ->where('messages.direction', 'outbound')
-                ->whereBetween('messages.created_at', [$start, $end])
-                ->whereNull('messages.error_code')
-                ->join('message_templates', 'messages.template_id', '=', 'message_templates.id')
-                ->where('message_templates.category', 'UTILITY')
-                ->distinct('messages.conversation_id')
-                ->count('messages.conversation_id');
-
-            $inboundConversationIds = Message::where('tenant_id', $tenantId)
-                ->where('direction', 'inbound')
-                ->whereBetween('created_at', [$start, $end])
-                ->pluck('conversation_id')
-                ->unique()
-                ->toArray();
-
-            $serviceCount = 0;
-            if (!empty($inboundConversationIds)) {
-                $serviceCount = Conversation::whereIn('id', $inboundConversationIds)
-                    ->whereDoesntHave('messages', function ($query) use ($start, $end) {
-                        $query->where('direction', 'outbound')
-                            ->whereNotNull('template_id')
-                            ->whereBetween('created_at', [$start, $end]);
-                    })
-                    ->count();
-            }
-
-            $marketingRate = 0.04;
-            $utilityRate = 0.015;
-            $serviceRate = 0.01;
-
-            $marketingCost = $marketingCount * $marketingRate;
-            $utilityCost = $utilityCount * $utilityRate;
-            
-            // First 1000 Service conversations per WABA per month are free
-            $freeTierRemaining = max(0, 1000 - $serviceCount);
-            $billableServiceCount = max(0, $serviceCount - 1000);
-            $serviceCost = $billableServiceCount * $serviceRate;
-
-            $totalCost = $marketingCost + $utilityCost + $serviceCost;
-
-            return [
-                'marketing_conversations' => $marketingCount,
-                'utility_conversations' => $utilityCount,
-                'service_conversations' => $serviceCount,
-                'marketing_cost' => $marketingCost,
-                'utility_cost' => $utilityCost,
-                'service_cost' => $serviceCost,
-                'free_tier_remaining' => $freeTierRemaining,
-                'total_estimated_cost' => $totalCost,
-            ];
-        };
-
         // Monthly stats for the target month
         $monthlyMessagesCount = Message::where('tenant_id', $tenantId)
             ->whereBetween('created_at', [$startOfTargetMonth, $endOfTargetMonth])
@@ -153,22 +98,18 @@ class DashboardController extends Controller
             ->pluck('count', 'status')
             ->toArray();
 
-        $targetBilling = $compileBillingForRange($startOfTargetMonth, $endOfTargetMonth);
+        $currentBilling = $billingService->getMonthlySnapshotSummary($tenant, Carbon::now());
 
         // Compile historical list of past 6 months (including the current month)
         $history = [];
         for ($i = 0; $i < 6; $i++) {
             $month = Carbon::now()->subMonths($i);
-            $start = $month->copy()->startOfMonth();
-            $end = $month->copy()->endOfMonth();
-            $billingData = $compileBillingForRange($start, $end);
+            $billingData = $billingService->getMonthlySnapshotSummary($tenant, $month);
             
             $history[] = [
                 'month_name' => $month->format('F Y'),
                 'month_key' => $month->format('Y-m'),
-                'marketing_conversations' => $billingData['marketing_conversations'],
-                'utility_conversations' => $billingData['utility_conversations'],
-                'service_conversations' => $billingData['service_conversations'],
+                'conversation_sessions_count' => $billingData['conversation_sessions_count'],
                 'free_tier_remaining' => $billingData['free_tier_remaining'],
                 'total_estimated_cost' => $billingData['total_estimated_cost'],
             ];
@@ -191,8 +132,34 @@ class DashboardController extends Controller
             'selected_month_name' => $startOfTargetMonth->format('F Y'),
             'start_date' => $startOfTargetMonth->format('Y-m-d'),
             'end_date' => $endOfTargetMonth->format('Y-m-d'),
-            'billing' => array_merge($targetBilling, ['currency' => 'USD']),
+            'billing' => array_merge($currentBilling, ['currency' => 'USD']),
             'history' => $history
+        ]);
+    }
+
+    /**
+     * Recalculate the current tenant billing snapshot and return the latest estimate.
+     */
+    public function refreshEstimationDetail(Request $request, TenantBillingService $billingService)
+    {
+        $tenantId = $request->get('tenant_id');
+        $tenant = Tenant::find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'tenant_not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        $snapshot = $billingService->syncMonthlySnapshot($tenant, Carbon::now());
+
+        return response()->json([
+            'message' => 'Billing estimate refreshed successfully.',
+            'billing' => array_merge($billingService->getMonthlySnapshotSummary($tenant, Carbon::now()), [
+                'currency' => 'USD',
+                'snapshot_id' => $snapshot->id,
+            ]),
         ]);
     }
 

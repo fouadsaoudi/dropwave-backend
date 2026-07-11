@@ -10,11 +10,20 @@ use App\Traits\BelongsToTenant;
 class MessageTemplate extends Model
 {
     use BelongsToTenant;
+
+    public const DEFAULT_BILLING_COSTS = [
+        'MARKETING' => '0.0341',
+        'UTILITY' => '0.0091',
+        'AUTHENTICATION' => '0.0091',
+        'SERVICE' => '0.0000',
+    ];
+
     protected $fillable = [
         'tenant_id',
         'channel_id',
         'name',
         'category',
+        'billing_cost',
         'language',
         'status',
         'meta_template_id',
@@ -29,6 +38,7 @@ class MessageTemplate extends Model
     ];
 
     protected $casts = [
+        'billing_cost' => 'decimal:4',
         'variables' => 'json',
         'submitted_at' => 'datetime',
         'approved_at' => 'datetime',
@@ -47,5 +57,12 @@ class MessageTemplate extends Model
     public function messages(): HasMany
     {
         return $this->hasMany(Message::class, 'template_id');
+    }
+
+    public static function defaultBillingCostForCategory(?string $category): string
+    {
+        $normalizedCategory = strtoupper(trim((string) $category));
+
+        return self::DEFAULT_BILLING_COSTS[$normalizedCategory] ?? '0.0000';
     }
 }

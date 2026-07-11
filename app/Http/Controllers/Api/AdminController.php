@@ -3,23 +3,101 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RecalculateTenantExpensesJob;
+use App\Models\Contact;
+use App\Models\Conversation;
+use App\Models\Message;
 use App\Models\Tenant;
 use App\Models\WabaChannel;
 use App\Models\User;
+use App\Services\TenantBillingService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use App\Http\Requests\ListTenantsRequest;
 use App\Http\Requests\ListTenantChannelsRequest;
+use App\Http\Requests\Admin\RecalculateTenantExpensesRequest;
 
 class AdminController extends Controller
 {
-    public function __construct()
+    private function requireAdmin(Request $request): ?\Illuminate\Http\JsonResponse
     {
-        $this->middleware(function ($request, $next) {
-            if (!$request->user() || !$request->user()->isAdmin()) {
-                return response()->json(['error' => 'forbidden', 'message' => 'Unauthorized admin access.'], 403);
-            }
-            return $next($request);
+        if (!$request->user() || !$request->user()->isAdmin()) {
+            return response()->json(['error' => 'forbidden', 'message' => 'Unauthorized admin access.'], 403);
+        }
+
+        return null;
+    }
+
+    /**
+     * Get admin platform overview metrics (Admin only).
+     */
+    public function getOverview(Request $request)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenantCount = Tenant::count();
+        $channelQuery = WabaChannel::withoutGlobalScopes()
+            ->with(['tenant:id,name,slug'])
+            ->get([
+                'id',
+                'tenant_id',
+                'display_name',
+                'phone_number',
+                'phone_number_id',
+                'waba_id',
+                'quality_rating',
+                'messaging_limit',
+                'is_active',
+                'is_primary',
+                'connected_at',
+                'token_expires_at',
+                'access_token',
+            ]);
+
+        $channels = $channelQuery->map(function (WabaChannel $channel) {
+            $issues = $this->getChannelHealthIssues($channel);
+            $severity = $this->getChannelHealthSeverity($issues);
+
+            return [
+                'id' => $channel->id,
+                'tenant' => [
+                    'id' => $channel->tenant?->id,
+                    'name' => $channel->tenant?->name,
+                    'slug' => $channel->tenant?->slug,
+                ],
+                'display_name' => $channel->display_name,
+                'phone_number' => $channel->phone_number,
+                'phone_number_id' => $channel->phone_number_id,
+                'waba_id' => $channel->waba_id,
+                'quality_rating' => $channel->quality_rating,
+                'messaging_limit' => $channel->messaging_limit,
+                'is_active' => $channel->is_active,
+                'is_primary' => $channel->is_primary,
+                'connected_at' => optional($channel->connected_at)->toDateTimeString(),
+                'token_expires_at' => optional($channel->token_expires_at)->toDateTimeString(),
+                'issues' => $issues,
+                'health_status' => $severity,
+                'meta_ready' => empty($issues) && !empty($channel->waba_id) && !empty($channel->phone_number_id) && !empty($channel->getRawOriginal('access_token')),
+            ];
         });
+
+        $problematicChannels = $channels
+            ->filter(fn ($channel) => $channel['health_status'] !== 'healthy')
+            ->values();
+
+        $healthyChannelsCount = $channels->count() - $problematicChannels->count();
+
+        return response()->json([
+            'tenants_count' => $tenantCount,
+            'channels_count' => $channels->count(),
+            'healthy_channels_count' => $healthyChannelsCount,
+            'problematic_channels_count' => $problematicChannels->count(),
+            'contacts_count' => Contact::withoutGlobalScopes()->count(),
+            'conversations_count' => Conversation::withoutGlobalScopes()->count(),
+            'problematic_channels' => $problematicChannels,
+        ]);
     }
 
     /**
@@ -27,6 +105,10 @@ class AdminController extends Controller
      */
     public function listTenants(ListTenantsRequest $request)
     {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
         $tenants = Tenant::withCount('channels')
             ->get(['id', 'name', 'slug', 'email', 'phone', 'is_active', 'created_at']);
 
@@ -38,6 +120,10 @@ class AdminController extends Controller
      */
     public function listTenantChannels(ListTenantChannelsRequest $request, $tenantId)
     {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
         $tenant = Tenant::find($tenantId);
 
         if (!$tenant) {
@@ -59,10 +145,127 @@ class AdminController extends Controller
     }
 
     /**
+     * Get tenant details with billing and message totals (Admin only).
+     */
+    public function getTenantDetails(Request $request, $tenantId, TenantBillingService $billingService)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::withCount('channels')->find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        $currentMonth = Carbon::now()->startOfMonth();
+        $excludeFailedTemplateMessages = function ($query) {
+            $query->where(function ($nested) {
+                $nested->whereNull('template_id')
+                    ->orWhereNull('error_message');
+            });
+        };
+
+        $totalMessagesSent = Message::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('direction', 'outbound')
+            ->where('status', '!=', 'failed')
+            ->where($excludeFailedTemplateMessages)
+            ->count();
+
+        $currentMonthMessagesSent = Message::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('direction', 'outbound')
+            ->where('status', '!=', 'failed')
+            ->whereBetween('created_at', [$currentMonth->copy()->startOfMonth(), $currentMonth->copy()->endOfMonth()->endOfDay()])
+            ->where($excludeFailedTemplateMessages)
+            ->count();
+
+        $billing = $billingService->getMonthlySnapshotSummary($tenant, Carbon::now());
+        $channels = WabaChannel::query()
+            ->where('tenant_id', $tenant->id)
+            ->orderByDesc('is_primary')
+            ->orderBy('id')
+            ->get([
+                'id',
+                'display_name',
+                'phone_number',
+                'phone_number_id',
+                'waba_id',
+                'quality_rating',
+                'messaging_limit',
+                'is_active',
+                'is_primary',
+                'connected_at',
+                'token_expires_at',
+                'created_at',
+            ]);
+
+        return response()->json([
+            'tenant' => [
+                'id' => $tenant->id,
+                'name' => $tenant->name,
+                'slug' => $tenant->slug,
+                'email' => $tenant->email,
+                'phone' => $tenant->phone,
+                'is_active' => $tenant->is_active,
+                'channels_count' => $tenant->channels_count,
+                'created_at' => $tenant->created_at,
+            ],
+            'total_messages_sent' => $totalMessagesSent,
+            'current_month_messages_sent' => $currentMonthMessagesSent,
+            'current_expenses' => $billing['total_estimated_cost'],
+            'channels' => $channels,
+            'billing' => array_merge($billing, ['currency' => 'USD']),
+        ]);
+    }
+
+    /**
+     * Recalculate billing expenses for a tenant (Admin only).
+     */
+    public function recalculateTenantExpenses(RecalculateTenantExpensesRequest $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        RecalculateTenantExpensesJob::dispatch(
+            $tenant->id,
+            $request->validated()['billing_month'] ?? null
+        );
+
+        return response()->json([
+            'message' => 'Tenant billing recalculation queued successfully.',
+            'tenant' => [
+                'id' => $tenant->id,
+                'name' => $tenant->name,
+            ],
+            'billing_month' => $request->validated()['billing_month'] ?? now()->format('Y-m'),
+        ]);
+    }
+
+    /**
      * List all system users with their roles and tenants (Admin only).
      */
     public function listUsers()
     {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
         $users = User::with(['tenant', 'role'])
             ->get(['id', 'tenant_id', 'role_id', 'name', 'email', 'is_active', 'created_at']);
 
@@ -74,6 +277,10 @@ class AdminController extends Controller
      */
     public function storeTenant(Request $request)
     {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
         $request->validate([
             'name' => 'required|string|max:255',
             'slug' => 'required|string|unique:tenants,slug|max:255',
@@ -100,6 +307,10 @@ class AdminController extends Controller
      */
     public function storeUser(Request $request)
     {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
         $request->validate([
             'tenant_id' => 'required|exists:tenants,id',
             'name' => 'required|string|max:255',
@@ -128,6 +339,10 @@ class AdminController extends Controller
      */
     public function updateUser(Request $request, $id)
     {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
         $user = User::find($id);
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
@@ -166,6 +381,10 @@ class AdminController extends Controller
      */
     public function deleteUser($id)
     {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
         if (auth()->id() == $id) {
             return response()->json([
                 'message' => 'Deletions denied: you cannot remove your active admin session profile.'
@@ -180,5 +399,56 @@ class AdminController extends Controller
         $user->delete();
 
         return response()->json(['message' => 'User account deleted successfully.']);
+    }
+
+    private function getChannelHealthIssues(WabaChannel $channel): array
+    {
+        $issues = [];
+
+        if (!$channel->is_active) {
+            $issues[] = 'Channel is inactive.';
+        }
+
+        if (empty($channel->waba_id)) {
+            $issues[] = 'Missing Meta WABA ID.';
+        }
+
+        if (empty($channel->phone_number_id)) {
+            $issues[] = 'Missing Meta phone number ID.';
+        }
+
+        if (empty($channel->access_token)) {
+            $issues[] = 'Missing Meta access token.';
+        }
+
+        if ($channel->token_expires_at && Carbon::parse($channel->token_expires_at)->isPast()) {
+            $issues[] = 'Meta access token is expired.';
+        }
+
+        $rating = strtoupper((string) $channel->quality_rating);
+        if ($rating === 'YELLOW') {
+            $issues[] = 'Channel quality rating is degraded.';
+        } elseif ($rating === 'RED') {
+            $issues[] = 'Channel quality rating is critical.';
+        } elseif (empty($rating)) {
+            $issues[] = 'No Meta quality rating available.';
+        }
+
+        return $issues;
+    }
+
+    private function getChannelHealthSeverity(array $issues): string
+    {
+        $hasCritical = collect($issues)->contains(fn ($issue) => str_contains($issue, 'expired') || str_contains($issue, 'Missing') || str_contains($issue, 'critical'));
+
+        if ($hasCritical) {
+            return 'critical';
+        }
+
+        if (!empty($issues)) {
+            return 'warning';
+        }
+
+        return 'healthy';
     }
 }

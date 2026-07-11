@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Models\TenantBillingSnapshot;
 
 class Tenant extends Model
 {
@@ -42,5 +43,10 @@ class Tenant extends Model
     public function templates(): HasMany
     {
         return $this->hasMany(MessageTemplate::class);
+    }
+
+    public function billingSnapshots(): HasMany
+    {
+        return $this->hasMany(TenantBillingSnapshot::class);
     }
 }

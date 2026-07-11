@@ -59,6 +59,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     // Dashboard Stats & Activity Feed
     Route::get('/dashboard/stats', [DashboardController::class, 'getStats']);
     Route::get('/dashboard/feed', [DashboardController::class, 'getActivityFeed']);
+    Route::post('/dashboard/estimationdetail', [DashboardController::class, 'refreshEstimationDetail']);
 
     // Notifications API Resource
     Route::get('/notifications', [\App\Http\Controllers\Api\NotificationController::class, 'index']);
@@ -67,9 +68,12 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::delete('/notifications', [\App\Http\Controllers\Api\NotificationController::class, 'clearAll']);
 
     // Admin Panel Actions
+    Route::get('/admin/overview', [AdminController::class, 'getOverview']);
     Route::get('/admin/tenants', [AdminController::class, 'listTenants']);
     Route::post('/admin/tenants', [AdminController::class, 'storeTenant']);
     Route::get('/admin/tenants/{tenant}/channels', [AdminController::class, 'listTenantChannels']);
+    Route::get('/admin/tenants/{tenantId}/details', [AdminController::class, 'getTenantDetails']);
+    Route::post('/admin/tenants/{tenantId}/recalculate-expenses', [AdminController::class, 'recalculateTenantExpenses']);
     Route::get('/admin/users', [AdminController::class, 'listUsers']);
     Route::post('/admin/users', [AdminController::class, 'storeUser']);
     Route::put('/admin/users/{id}', [AdminController::class, 'updateUser']);

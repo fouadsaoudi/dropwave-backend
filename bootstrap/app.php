@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant' => \App\Http\Middleware\EnsureTenantScope::class,
             'meta.webhook.signature' => \App\Http\Middleware\VerifyMetaWebhookSignature::class,
         ]);
+        $middleware->redirectGuestsTo(fn () => null);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

@@ -19,6 +19,8 @@ Route::get('/health', function () {
 Route::get('/webhooks/meta', [WebhookController::class, 'verify']);
 Route::post('/webhooks/meta', [WebhookController::class, 'receive'])->middleware('meta.webhook.signature');
 
+Route::get('/media/proxy', [\App\Http\Controllers\Api\MediaController::class, 'proxy']);
+
 // Protected routes (Sanctum authed & Tenant scoped)
 Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);

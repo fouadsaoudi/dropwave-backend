@@ -34,6 +34,8 @@ class Message extends Model
         'read_at',
     ];
 
+    protected $appends = ['media_proxy_url'];
+
     protected $casts = [
         'latitude' => 'decimal:8',
         'longitude' => 'decimal:8',
@@ -41,6 +43,16 @@ class Message extends Model
         'delivered_at' => 'datetime',
         'read_at' => 'datetime',
     ];
+
+    public function getMediaProxyUrlAttribute(): ?string
+    {
+        if (!$this->media_url) {
+            return null;
+        }
+
+        $hash = hash_hmac('sha256', $this->id, config('app.key'));
+        return "/media/proxy?message_id={$this->id}&hash={$hash}";
+    }
 
     public function tenant(): BelongsTo
     {

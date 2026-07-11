@@ -185,12 +185,34 @@ class ProcessWebhookJob implements ShouldQueue
             $lat = $msg['location']['latitude'] ?? null;
             $lng = $msg['location']['longitude'] ?? null;
 
+            $mediaUrl = null;
+            $mediaMimeType = null;
+            $mediaFilename = null;
+
+            // Handle captions for media types
+            if (!$body && in_array($type, ['image', 'video', 'document'])) {
+                $body = $msg[$type]['caption'] ?? null;
+            }
+
+            // Extract media files metadata
+            if (in_array($type, ['image', 'video', 'audio', 'document', 'sticker'])) {
+                $mediaObj = $msg[$type] ?? null;
+                if ($mediaObj) {
+                    $mediaUrl = $mediaObj['url'] ?? null;
+                    $mediaMimeType = $mediaObj['mime_type'] ?? null;
+                    $mediaFilename = $mediaObj['filename'] ?? $mediaObj['id'] ?? null;
+                }
+            }
+
             $message = Message::withoutGlobalScopes()->create([
                 'tenant_id' => $channel->tenant_id,
                 'conversation_id' => $conversation->id,
                 'direction' => 'inbound',
                 'type' => $type,
                 'body' => $body,
+                'media_url' => $mediaUrl,
+                'media_mime_type' => $mediaMimeType,
+                'media_filename' => $mediaFilename,
                 'latitude' => $lat,
                 'longitude' => $lng,
                 'whatsapp_msg_id' => $msgId,

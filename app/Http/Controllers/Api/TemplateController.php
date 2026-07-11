@@ -20,14 +20,20 @@ class TemplateController extends Controller
         $this->metaService = $metaService;
     }
 
-    /**
-     * Display a listing of local message templates.
-     */
-    public function index()
+    public function index(Request $request)
     {
-        $templates = MessageTemplate::with('channel')
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $user = $request->user();
+
+        if ($user && $user->isAdmin()) {
+            $templates = MessageTemplate::withoutGlobalScopes()
+                ->with(['channel', 'tenant:id,name'])
+                ->orderBy('created_at', 'desc')
+                ->get();
+        } else {
+            $templates = MessageTemplate::with('channel')
+                ->orderBy('created_at', 'desc')
+                ->get();
+        }
 
         return response()->json($templates);
     }
@@ -37,9 +43,10 @@ class TemplateController extends Controller
      */
     public function store(StoreTemplateRequest $request)
     {
-        $channel = WabaChannel::find($request->channel_id);
+        $user = $request->user();
+        $channel = WabaChannel::withoutGlobalScopes()->find($request->channel_id);
 
-        if (!$channel || $channel->tenant_id !== Auth::user()->tenant_id) {
+        if (!$channel || (!$user->isAdmin() && $channel->tenant_id !== $user->tenant_id)) {
             return response()->json([
                 'error' => 'invalid_channel',
                 'message' => 'Selected WhatsApp channel is invalid or not owned by this tenant.'
@@ -118,7 +125,7 @@ class TemplateController extends Controller
 
             // 3. Save local template record in DB
             $template = MessageTemplate::create([
-                'tenant_id' => Auth::user()->tenant_id,
+                'tenant_id' => $channel->tenant_id,
                 'channel_id' => $channel->id,
                 'name' => $request->name,
                 'category' => $request->category,
@@ -152,8 +159,89 @@ class TemplateController extends Controller
      */
     public function sync(Request $request)
     {
+        $user = $request->user();
+
+        if ($user->isAdmin()) {
+            $tenantId = 0;
+
+            // Resolve tenant_id from template_id if provided
+            $reqTemplateId = $request->input('template_id') 
+                ?? $request->input('templateId') 
+                ?? $request->query('template_id') 
+                ?? $request->query('templateId') 
+                ?? $request->json('template_id')
+                ?? $request->json('templateId');
+
+            if ($reqTemplateId) {
+                $template = MessageTemplate::withoutGlobalScopes()->find($reqTemplateId);
+                if ($template) {
+                    $tenantId = (int) $template->tenant_id;
+                }
+            }
+
+            // Fallback to explicit tenant_id parameters
+            if ($tenantId === 0) {
+                $tenantId = (int) ($request->input('tenant_id') 
+                    ?? $request->input('tenantId') 
+                    ?? $request->query('tenant_id') 
+                    ?? $request->query('tenantId') 
+                    ?? $request->json('tenant_id')
+                    ?? $request->json('tenantId')
+                    ?? 0);
+            }
+
+            // If no tenant is explicitly targeted, sync templates for ALL active tenants
+            if ($tenantId === 0) {
+                $channels = WabaChannel::withoutGlobalScopes()
+                    ->where('is_active', true)
+                    ->whereNotNull('access_token')
+                    ->whereNotNull('waba_id')
+                    ->with('tenant')
+                    ->get();
+
+                if ($channels->isEmpty()) {
+                    return response()->json([
+                        'error' => 'no_channels',
+                        'message' => 'No active WhatsApp channels found on the system to sync.'
+                    ], 400);
+                }
+
+                $syncedTenants = [];
+                $totalSynced = 0;
+                $errors = [];
+
+                foreach ($channels as $channel) {
+                    try {
+                        $count = $this->syncChannelTemplates($channel);
+                        $syncedTenants[] = [
+                            'tenant_id' => $channel->tenant_id,
+                            'tenant_name' => $channel->tenant?->name ?? 'Unknown',
+                            'synced_count' => $count
+                        ];
+                        $totalSynced += $count;
+                    } catch (Exception $e) {
+                        $errors[] = [
+                            'tenant_id' => $channel->tenant_id,
+                            'tenant_name' => $channel->tenant?->name ?? 'Unknown',
+                            'error' => $e->getMessage()
+                        ];
+                    }
+                }
+
+                return response()->json([
+                    'message' => "Successfully synced templates across active tenant accounts.",
+                    'total_synced_count' => $totalSynced,
+                    'tenants_synced' => $syncedTenants,
+                    'errors' => $errors
+                ]);
+            }
+        } else {
+            $tenantId = $user->tenant_id;
+        }
+
         // Get primary channel for tenant
-        $channel = WabaChannel::where('tenant_id', Auth::user()->tenant_id)
+        $channel = WabaChannel::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
             ->where('is_active', true)
             ->first();
 
@@ -165,73 +253,7 @@ class TemplateController extends Controller
         }
 
         try {
-            // Fetch latest templates schemas from Meta
-            $metaData = $this->metaService->fetchMessageTemplates(
-                $channel->decrypted_token,
-                $channel->waba_id
-            );
-
-            $syncedCount = 0;
-
-            foreach ($metaData['data'] ?? [] as $metaTpl) {
-                // Parse component strings
-                $bodyText = '';
-                $headerType = 'none';
-                $headerContent = null;
-                $footerText = null;
-
-                foreach ($metaTpl['components'] ?? [] as $comp) {
-                    if ($comp['type'] === 'BODY') {
-                        $bodyText = $comp['text'] ?? '';
-                    } elseif ($comp['type'] === 'HEADER') {
-                        $headerType = strtolower($comp['format'] ?? 'none');
-                        $headerContent = $comp['text'] ?? null;
-                    } elseif ($comp['type'] === 'FOOTER') {
-                        $footerText = $comp['text'] ?? null;
-                    }
-                }
-
-                preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
-                $variables = array_map('intval', array_unique($matches[1] ?? []));
-                sort($variables);
-
-                $status = strtoupper($metaTpl['status'] ?? 'PENDING');
-                
-                // Map language locale code (e.g. en_US -> en)
-                $lang = str_starts_with($metaTpl['language'], 'en') ? 'en' : $metaTpl['language'];
-
-                $tplData = [
-                    'meta_template_id' => $metaTpl['id'] ?? null,
-                    'status' => $status,
-                    'category' => $metaTpl['category'] ?? 'UTILITY',
-                    'billing_cost' => MessageTemplate::defaultBillingCostForCategory($metaTpl['category'] ?? 'UTILITY'),
-                    'language' => $lang,
-                    'header_type' => $headerType,
-                    'header_content' => $headerContent,
-                    'body' => $bodyText,
-                    'footer' => $footerText,
-                    'variables' => $variables,
-                    'rejection_reason' => $metaTpl['rejected_reason'] ?? null,
-                    'approved_at' => $status === 'APPROVED' ? now() : null,
-                ];
-
-                // Find local template by name
-                $localTpl = MessageTemplate::withoutGlobalScopes()
-                    ->where('tenant_id', Auth::user()->tenant_id)
-                    ->where('name', $metaTpl['name'])
-                    ->first();
-
-                if ($localTpl) {
-                    $localTpl->update($tplData);
-                } else {
-                    MessageTemplate::create(array_merge($tplData, [
-                        'tenant_id' => Auth::user()->tenant_id,
-                        'channel_id' => $channel->id,
-                        'name' => $metaTpl['name'],
-                    ]));
-                }
-                $syncedCount++;
-            }
+            $syncedCount = $this->syncChannelTemplates($channel);
 
             return response()->json([
                 'message' => "Successfully synced {$syncedCount} templates with Meta API.",
@@ -244,6 +266,86 @@ class TemplateController extends Controller
                 'message' => 'Failed to sync templates with Meta: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Private helper to perform the actual templates sync for a single channel.
+     */
+    private function syncChannelTemplates(WabaChannel $channel): int
+    {
+        if (!$channel->decrypted_token || !$channel->waba_id) {
+            return 0;
+        }
+
+        // Fetch latest templates schemas from Meta
+        $metaData = $this->metaService->fetchMessageTemplates(
+            $channel->decrypted_token,
+            $channel->waba_id
+        );
+
+        $syncedCount = 0;
+
+        foreach ($metaData['data'] ?? [] as $metaTpl) {
+            // Parse component strings
+            $bodyText = '';
+            $headerType = 'none';
+            $headerContent = null;
+            $footerText = null;
+
+            foreach ($metaTpl['components'] ?? [] as $comp) {
+                if ($comp['type'] === 'BODY') {
+                    $bodyText = $comp['text'] ?? '';
+                } elseif ($comp['type'] === 'HEADER') {
+                    $headerType = strtolower($comp['format'] ?? 'none');
+                    $headerContent = $comp['text'] ?? null;
+                } elseif ($comp['type'] === 'FOOTER') {
+                    $footerText = $comp['text'] ?? null;
+                }
+            }
+
+            preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
+            $variables = array_map('intval', array_unique($matches[1] ?? []));
+            sort($variables);
+
+            $status = strtoupper($metaTpl['status'] ?? 'PENDING');
+            
+            // Map language locale code (e.g. en_US -> en)
+            $lang = str_starts_with($metaTpl['language'], 'en') ? 'en' : $metaTpl['language'];
+
+            $tplData = [
+                'meta_template_id' => $metaTpl['id'] ?? null,
+                'status' => $status,
+                'category' => $metaTpl['category'] ?? 'UTILITY',
+                'billing_cost' => MessageTemplate::defaultBillingCostForCategory($metaTpl['category'] ?? 'UTILITY'),
+                'language' => $lang,
+                'header_type' => $headerType,
+                'header_content' => $headerContent,
+                'body' => $bodyText,
+                'footer' => $footerText,
+                'variables' => $variables,
+                'rejection_reason' => $metaTpl['rejected_reason'] ?? null,
+                'approved_at' => $status === 'APPROVED' ? now() : null,
+            ];
+
+            // Find local template by name
+            $localTpl = MessageTemplate::withoutGlobalScopes()
+                ->where('tenant_id', $channel->tenant_id)
+                ->where('name', $metaTpl['name'])
+                ->first();
+
+            if ($localTpl) {
+                $localTpl->update($tplData);
+            } else {
+                MessageTemplate::create(array_merge($tplData, [
+                    'tenant_id' => $channel->tenant_id,
+                    'channel_id' => $channel->id,
+                    'name' => $metaTpl['name'],
+                ]));
+            }
+            $syncedCount++;
+        }
+
+        return $syncedCount;
     }
 
     /**

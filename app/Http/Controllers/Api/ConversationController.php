@@ -306,6 +306,11 @@ class ConversationController extends Controller
             ->where('status', '!=', 'read')
             ->update(['status' => 'read']);
 
+        // 4. Mark associated notifications as read
+        \App\Models\Notification::where('conversation_id', $conversation->id)
+            ->where('is_read', false)
+            ->update(['is_read' => true]);
+
         $conversation->load(['contact', 'channel', 'assignee']);
         broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
 

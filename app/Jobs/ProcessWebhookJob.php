@@ -198,6 +198,15 @@ class ProcessWebhookJob implements ShouldQueue
                 'sent_at' => $timestamp,
             ]);
 
+            // 4. Create Notification
+            \App\Models\Notification::withoutGlobalScopes()->create([
+                'tenant_id' => $channel->tenant_id,
+                'sender' => $contact->name ?: $fromNumber,
+                'message_body' => $lastMessageBody,
+                'conversation_id' => $conversation->id,
+                'is_read' => false,
+            ]);
+
             // Broadcast Echo/Reverb events
             broadcast(new \App\Events\MessageBroadcasted($message));
             broadcast(new \App\Events\ConversationUpdated($conversation));

@@ -267,7 +267,9 @@ class MetaApiService
     {
         $url = "{$this->baseUrl}/{$this->version}/{$wabaId}/message_templates";
 
-        $response = Http::withToken($accessToken)->get($url);
+        $response = Http::withToken($accessToken)->get($url, [
+            'fields' => 'name,status,components,language,category,rejected_reason'
+        ]);
 
         if ($response->failed()) {
             Log::error("Failed to fetch WhatsApp message templates for WABA {$wabaId}", [

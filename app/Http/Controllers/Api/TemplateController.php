@@ -52,14 +52,34 @@ class TemplateController extends Controller
             $langCode = 'en_US';
         }
 
+        // Extract variables indexes from content body (e.g. {{1}}, {{2}})
+        preg_match_all('/\{\{(\d+)\}\}/', $request->body, $matches);
+        $variables = array_map('intval', array_unique($matches[1] ?? []));
+        sort($variables);
+
         // 1. Build Meta API payload
         $components = [];
 
-        // Body block (Required)
-        $components[] = [
+        $bodyComponent = [
             'type' => 'BODY',
             'text' => $request->body,
         ];
+
+        // Attach variable examples if present in request (required by Meta Cloud API)
+        if (!empty($variables) && $request->has('variable_examples')) {
+            $bodySamples = [];
+            foreach ($variables as $index) {
+                $bodySamples[] = (string) ($request->input("variable_examples.{$index}") ?? "sample");
+            }
+            $bodyComponent['example'] = [
+                'body_text' => [
+                    $bodySamples
+                ]
+            ];
+        }
+
+        // Body block (Required)
+        $components[] = $bodyComponent;
 
         // Header block (Optional)
         if ($request->header_type !== 'none') {
@@ -95,11 +115,6 @@ class TemplateController extends Controller
                 $channel->waba_id,
                 $metaPayload
             );
-
-            // Extract variables indexes from content body (e.g. {{1}}, {{2}})
-            preg_match_all('/\{\{(\d+)\}\}/', $request->body, $matches);
-            $variables = array_map('intval', array_unique($matches[1] ?? []));
-            sort($variables);
 
             // 3. Save local template record in DB
             $template = MessageTemplate::create([
@@ -194,7 +209,7 @@ class TemplateController extends Controller
                     'body' => $bodyText,
                     'footer' => $footerText,
                     'variables' => $variables,
-                    'rejection_reason' => $metaTpl['rejection_reason'] ?? null,
+                    'rejection_reason' => $metaTpl['rejected_reason'] ?? null,
                     'approved_at' => $status === 'APPROVED' ? now() : null,
                 ];
 

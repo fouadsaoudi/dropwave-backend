@@ -28,6 +28,7 @@ class StoreTemplateRequest extends FormRequest
             'header_content' => 'nullable|string|max:1024',
             'body' => 'required|string|max:4096',
             'footer' => 'nullable|string|max:1024',
+            'variable_examples' => 'nullable|array',
         ];
     }
 

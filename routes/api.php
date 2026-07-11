@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\WebhookController;
 
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\ConversationController;
+use App\Http\Controllers\Api\DashboardController;
 
 // Public routes
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -55,7 +56,22 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::delete('/templates/{id}', [\App\Http\Controllers\Api\TemplateController::class, 'destroy']);
     Route::post('/templates/sync', [\App\Http\Controllers\Api\TemplateController::class, 'sync']);
 
-    // Admin
+    // Dashboard Stats & Activity Feed
+    Route::get('/dashboard/stats', [DashboardController::class, 'getStats']);
+    Route::get('/dashboard/feed', [DashboardController::class, 'getActivityFeed']);
+
+    // Notifications API Resource
+    Route::get('/notifications', [\App\Http\Controllers\Api\NotificationController::class, 'index']);
+    Route::post('/notifications/{id}/read', [\App\Http\Controllers\Api\NotificationController::class, 'markAsRead']);
+    Route::post('/notifications/read-all', [\App\Http\Controllers\Api\NotificationController::class, 'markAllAsRead']);
+    Route::delete('/notifications', [\App\Http\Controllers\Api\NotificationController::class, 'clearAll']);
+
+    // Admin Panel Actions
     Route::get('/admin/tenants', [AdminController::class, 'listTenants']);
+    Route::post('/admin/tenants', [AdminController::class, 'storeTenant']);
     Route::get('/admin/tenants/{tenant}/channels', [AdminController::class, 'listTenantChannels']);
+    Route::get('/admin/users', [AdminController::class, 'listUsers']);
+    Route::post('/admin/users', [AdminController::class, 'storeUser']);
+    Route::put('/admin/users/{id}', [AdminController::class, 'updateUser']);
+    Route::delete('/admin/users/{id}', [AdminController::class, 'deleteUser']);
 });

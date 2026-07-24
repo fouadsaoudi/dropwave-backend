@@ -212,24 +212,71 @@ class ConversationController extends Controller
         $channel = $conversation->channel;
         $contact = $conversation->contact;
 
-        try {
-            // 2. Dispatch message using Meta WhatsApp Business API
-            $metaResponse = $this->metaService->sendTextMessage(
-                $channel->decrypted_token,
-                $channel->phone_number_id,
-                $contact->phone_number,
-                $request->body
-            );
+        $hasFile = $request->hasFile('file');
+        $mediaPath = null;
+        $mediaMimeType = null;
+        $mediaFilename = null;
+        $whatsappMsgId = null;
 
-            $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+        try {
+            if ($hasFile) {
+                $file = $request->file('file');
+                $mediaMimeType = $file->getClientMimeType();
+                $mediaFilename = $file->getClientOriginalName();
+                
+                // Store local copy on server
+                $storedPath = $file->store('media', 'public');
+                $mediaPath = 'storage/' . $storedPath;
+                
+                // Absolute path to upload to Meta
+                $absolutePath = storage_path('app/public/' . $storedPath);
+                
+                // 2.a. Upload media to Meta
+                $uploadResponse = $this->metaService->uploadMedia(
+                    $channel->decrypted_token,
+                    $phoneNumberId = $channel->phone_number_id,
+                    $absolutePath,
+                    $mediaMimeType
+                );
+                
+                $metaMediaId = $uploadResponse['id'] ?? null;
+                if (!$metaMediaId) {
+                    throw new \Exception('Meta upload did not return a valid media ID');
+                }
+                
+                // 2.b. Dispatch image message using Meta WhatsApp Business API
+                $metaResponse = $this->metaService->sendImageMessage(
+                    $channel->decrypted_token,
+                    $channel->phone_number_id,
+                    $contact->phone_number,
+                    $metaMediaId,
+                    $request->body // caption
+                );
+                
+                $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+                $mediaFilename = $metaMediaId; // Use the meta media ID as our reference
+            } else {
+                // 2. Dispatch standard text message using Meta WhatsApp Business API
+                $metaResponse = $this->metaService->sendTextMessage(
+                    $channel->decrypted_token,
+                    $channel->phone_number_id,
+                    $contact->phone_number,
+                    $request->body
+                );
+
+                $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+            }
 
             // 3. Save message record to database
             $message = Message::create([
                 'tenant_id' => $conversation->tenant_id,
                 'conversation_id' => $conversation->id,
                 'direction' => 'outbound',
-                'type' => 'text',
+                'type' => $hasFile ? 'image' : 'text',
                 'body' => $request->body,
+                'media_url' => $mediaPath,
+                'media_mime_type' => $mediaMimeType,
+                'media_filename' => $mediaFilename,
                 'whatsapp_msg_id' => $whatsappMsgId,
                 'status' => 'sent',
                 'sent_by' => Auth::id(),
@@ -238,7 +285,7 @@ class ConversationController extends Controller
 
             // 4. Update conversation metadata
             $conversation->update([
-                'last_message_body' => $request->body,
+                'last_message_body' => $hasFile ? '📷 Photo' : $request->body,
                 'last_message_at' => now(),
             ]);
 

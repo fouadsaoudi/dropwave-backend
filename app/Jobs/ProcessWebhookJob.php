@@ -158,25 +158,31 @@ class ProcessWebhookJob implements ShouldQueue
 
             $lastMessageBody = $this->getMessagePreviewBody($msg);
 
+            // Check if the webhook message is stale (sent more than 24 hours ago)
+            $isStale = $timestamp->copy()->addHours(24)->isBefore(Carbon::now());
+
             if (!$conversation) {
                 $conversation = Conversation::withoutGlobalScopes()->create([
                     'tenant_id' => $channel->tenant_id,
                     'contact_id' => $contact->id,
                     'channel_id' => $channel->id,
-                    'status' => 'open',
+                    'status' => $isStale ? 'resolved' : 'open',
                     'window_expires_at' => $timestamp->copy()->addHours(24),
                     'last_message_at' => $timestamp,
                     'last_message_body' => $lastMessageBody,
-                    'unread_count' => 1,
+                    'unread_count' => $isStale ? 0 : 1,
                 ]);
             } else {
-                $conversation->update([
-                    'status' => 'open', // Re-open tickets automatically on client incoming messages
+                $updateData = [
                     'window_expires_at' => $timestamp->copy()->addHours(24),
                     'last_message_at' => $timestamp,
                     'last_message_body' => $lastMessageBody,
-                    'unread_count' => $conversation->unread_count + 1,
-                ]);
+                ];
+                if (!$isStale) {
+                    $updateData['status'] = 'open';
+                    $updateData['unread_count'] = $conversation->unread_count + 1;
+                }
+                $conversation->update($updateData);
             }
 
             // 3. Save Message
@@ -221,13 +227,15 @@ class ProcessWebhookJob implements ShouldQueue
             ]);
 
             // 4. Create Notification
-            \App\Models\Notification::withoutGlobalScopes()->create([
-                'tenant_id' => $channel->tenant_id,
-                'sender' => $contact->name ?: $fromNumber,
-                'message_body' => $lastMessageBody,
-                'conversation_id' => $conversation->id,
-                'is_read' => false,
-            ]);
+            if (!$isStale) {
+                \App\Models\Notification::withoutGlobalScopes()->create([
+                    'tenant_id' => $channel->tenant_id,
+                    'sender' => $contact->name ?: $fromNumber,
+                    'message_body' => $lastMessageBody,
+                    'conversation_id' => $conversation->id,
+                    'is_read' => false,
+                ]);
+            }
 
             // Broadcast Echo/Reverb events
             broadcast(new \App\Events\MessageBroadcasted($message));

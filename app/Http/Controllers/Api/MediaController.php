@@ -49,6 +49,26 @@ class MediaController extends Controller
         if (!$message->media_url) {
             abort(404, 'Message has no media attachment');
         }
+
+        // If it's a local storage URL, stream the local file directly
+        if (!str_starts_with($message->media_url, 'http://') && !str_starts_with($message->media_url, 'https://')) {
+            $relativePath = str_replace(['public/', 'storage/'], '', $message->media_url);
+            $path = storage_path('app/public/' . $relativePath);
+
+            if (!file_exists($path)) {
+                $path = storage_path('app/' . $relativePath); // fallback to private storage
+            }
+
+            if (!file_exists($path)) {
+                abort(404, 'Local media file not found');
+            }
+
+            $contentType = $message->media_mime_type ?: mime_content_type($path) ?: 'application/octet-stream';
+            return response()->file($path, [
+                'Content-Type' => $contentType,
+                'Cache-Control' => 'max-age=86400, public'
+            ]);
+        }
         
         // Get the WABA channel from the conversation
         $conversation = $message->conversation;

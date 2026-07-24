@@ -303,4 +303,65 @@ class MetaApiService
 
         return $response->json();
     }
+
+    /**
+     * Upload media file to Meta.
+     */
+    public function uploadMedia(string $accessToken, string $phoneNumberId, string $filePath, string $mimeType): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/media";
+
+        $response = Http::withToken($accessToken)
+            ->attach('file', file_get_contents($filePath), basename($filePath), [
+                'Content-Type' => $mimeType
+            ])
+            ->post($url, [
+                'messaging_product' => 'whatsapp',
+                'type' => $mimeType
+            ]);
+
+        if ($response->failed()) {
+            Log::error("Failed to upload media via {$phoneNumberId}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API media upload failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Send an image message using a Meta media ID.
+     */
+    public function sendImageMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $caption = null): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'image',
+            'image' => [
+                'id' => $mediaId
+            ]
+        ];
+
+        if ($caption) {
+            $payload['image']['caption'] = $caption;
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp image message via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send image message failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
 }

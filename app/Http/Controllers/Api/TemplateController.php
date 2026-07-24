@@ -309,8 +309,8 @@ class TemplateController extends Controller
 
             $status = strtoupper($metaTpl['status'] ?? 'PENDING');
             
-            // Map language locale code (e.g. en_US -> en)
-            $lang = str_starts_with($metaTpl['language'], 'en') ? 'en' : $metaTpl['language'];
+            // Keep the exact language code returned by Meta (e.g. en_US)
+            $lang = $metaTpl['language'];
 
             $tplData = [
                 'meta_template_id' => $metaTpl['id'] ?? null,

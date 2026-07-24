@@ -20,7 +20,8 @@ class SendMessageRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'body' => 'required|string|max:4000',
+            'body' => 'required_without:file|nullable|string|max:4000',
+            'file' => 'required_without:body|nullable|file|image|max:15360', // max 15MB
         ];
     }
 }

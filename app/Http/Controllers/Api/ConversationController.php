@@ -30,7 +30,7 @@ class ConversationController extends Controller
      */
     public function index(ListConversationsRequest $request)
     {
-        $query = Conversation::with(['contact', 'channel', 'assignee']);
+        $query = Conversation::with(['contact', 'assignee']);
 
         // Filter by status if provided
         if ($request->has('status')) {
@@ -508,7 +508,6 @@ class ConversationController extends Controller
                 'status' => 'open', // Ensure it opens/reopens if closed
                 'last_message_body' => $msgBody,
                 'last_message_at' => now(),
-                'window_expires_at' => now()->addHours(24), // Reset the 24h window expires time
             ]);
 
             // 4. Broadcast live socket events

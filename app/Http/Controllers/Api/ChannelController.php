@@ -112,6 +112,64 @@ class ChannelController extends Controller
     }
 
     /**
+     * Manually connect WABA and phone number for a tenant.
+     */
+    public function connectManual(Request $request)
+    {
+        $request->validate([
+            'display_name' => 'required|string|max:255',
+            'phone_number' => 'required|string|max:255',
+            'phone_number_id' => 'required|string|max:255',
+            'waba_id' => 'required|string|max:255',
+            'access_token' => 'required|string',
+        ]);
+
+        $tenantId = $request->get('tenant_id');
+
+        try {
+            // Auto-subscribe the Meta App to WABA webhook notifications
+            try {
+                $this->metaService->subscribeAppToWaba($request->waba_id, $request->access_token);
+            } catch (Exception $e) {
+                Log::warning("Failed to auto-subscribe to WABA {$request->waba_id} webhooks during manual setup: " . $e->getMessage());
+            }
+
+            // Create or update the channel for the current tenant
+            $channel = WabaChannel::updateOrCreate(
+                [
+                    'tenant_id' => $tenantId,
+                    'phone_number_id' => $request->phone_number_id,
+                ],
+                [
+                    'display_name' => $request->display_name,
+                    'phone_number' => $request->phone_number,
+                    'waba_id' => $request->waba_id,
+                    'access_token' => $request->access_token, // Mutator encrypts this automatically
+                    'quality_rating' => 'GREEN',
+                    'is_active' => true,
+                    'connected_at' => now(),
+                ]
+            );
+
+            return response()->json([
+                'message' => 'Channel connected manually successfully.',
+                'channel' => [
+                    'id' => $channel->id,
+                    'display_name' => $channel->display_name,
+                    'phone_number' => $channel->phone_number,
+                    'quality_rating' => $channel->quality_rating,
+                ]
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'error' => 'manual_connection_failed',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * List all active channels for the tenant.
      */
     public function index(Request $request)

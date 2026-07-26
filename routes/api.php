@@ -29,6 +29,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     // Channels
     Route::get('/channels', [ChannelController::class, 'index']);
     Route::post('/channels/connect', [ChannelController::class, 'connect']);
+    Route::post('/channels/manual', [ChannelController::class, 'connectManual']);
     Route::post('/channels/{id}/override-webhook', [ChannelController::class, 'overrideWebhook']);
 
     // Conversations
@@ -73,7 +74,12 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/admin/overview', [AdminController::class, 'getOverview']);
     Route::get('/admin/tenants', [AdminController::class, 'listTenants']);
     Route::post('/admin/tenants', [AdminController::class, 'storeTenant']);
+    Route::put('/admin/tenants/{tenantId}', [AdminController::class, 'updateTenant']);
     Route::get('/admin/tenants/{tenant}/channels', [AdminController::class, 'listTenantChannels']);
+    Route::post('/admin/tenants/{tenantId}/channels', [AdminController::class, 'storeTenantChannel']);
+    Route::put('/admin/channels/{channelId}', [AdminController::class, 'updateChannel']);
+    Route::delete('/admin/channels/{channelId}', [AdminController::class, 'deleteChannel']);
+    Route::post('/admin/channels/{channelId}/override-webhook', [AdminController::class, 'overrideChannelWebhook']);
     Route::get('/admin/tenants/{tenantId}/details', [AdminController::class, 'getTenantDetails']);
     Route::post('/admin/tenants/{tenantId}/recalculate-expenses', [AdminController::class, 'recalculateTenantExpenses']);
     Route::get('/admin/users', [AdminController::class, 'listUsers']);

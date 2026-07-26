@@ -55,7 +55,7 @@ class ProcessWebhookJob implements ShouldQueue
             }
 
             // Identify WABA channel phone number id
-            $phoneId = $value['metadata']['phone_number_id'] ?? null;
+            $phoneId = $value['metadata']['phone_number_id'] ?? $value['phone_number_id'] ?? null;
             if (!$phoneId) {
                 $event->update([
                     'processed' => true,
@@ -72,6 +72,36 @@ class ProcessWebhookJob implements ShouldQueue
 
             // Link event to tenant
             $event->update(['tenant_id' => $channel->tenant_id]);
+
+            // Process Phone Number Quality Updates
+            $field = $change['field'] ?? null;
+            if ($field === 'phone_number_quality_update') {
+                $newRating = $value['new_quality_rating'] ?? null;
+                if ($newRating && in_array(strtoupper($newRating), ['GREEN', 'YELLOW', 'RED'])) {
+                    $oldRating = $channel->quality_rating;
+                    $newRatingUpper = strtoupper($newRating);
+
+                    if ($oldRating !== $newRatingUpper) {
+                        $channel->update([
+                            'quality_rating' => $newRatingUpper
+                        ]);
+                        Log::info("WABA Channel {$channel->id} quality rating updated to {$newRatingUpper} via webhook.");
+
+                        // If rating turned to YELLOW or RED, send alert email
+                        if ($newRatingUpper === 'YELLOW' || $newRatingUpper === 'RED') {
+                            try {
+                                $adminEmail = env('ADMIN_ALERT_EMAIL', 'fouad.saoudi94@gmail.com');
+                                \Illuminate\Support\Facades\Mail::to($adminEmail)->send(
+                                    new \App\Mail\ChannelQualityWarningMail($channel, $oldRating, $newRatingUpper)
+                                );
+                                Log::info("Channel quality warning email sent to {$adminEmail}");
+                            } catch (Exception $e) {
+                                Log::error("Failed to send quality warning email: " . $e->getMessage());
+                            }
+                        }
+                    }
+                }
+            }
 
             // Process Inbound Messages
             if (isset($value['messages']) && is_array($value['messages'])) {

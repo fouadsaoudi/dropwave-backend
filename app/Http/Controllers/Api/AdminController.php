@@ -110,7 +110,7 @@ class AdminController extends Controller
         }
 
         $tenants = Tenant::withCount('channels')
-            ->get(['id', 'name', 'slug', 'email', 'phone', 'is_active', 'created_at']);
+            ->get(['id', 'name', 'slug', 'contact_name', 'email', 'phone', 'is_active', 'created_at']);
 
         return response()->json($tenants);
     }
@@ -210,6 +210,7 @@ class AdminController extends Controller
                 'id' => $tenant->id,
                 'name' => $tenant->name,
                 'slug' => $tenant->slug,
+                'contact_name' => $tenant->contact_name,
                 'email' => $tenant->email,
                 'phone' => $tenant->phone,
                 'is_active' => $tenant->is_active,
@@ -300,6 +301,48 @@ class AdminController extends Controller
             'message' => 'Tenant workspace created successfully.',
             'tenant' => $tenant
         ], 201);
+    }
+
+    /**
+     * Update an existing Tenant workspace (Admin only).
+     */
+    public function updateTenant(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'slug' => 'required|string|max:255|unique:tenants,slug,' . $tenant->id,
+            'contact_name' => 'nullable|string|max:255',
+            'email' => 'required|email|max:255|unique:tenants,email,' . $tenant->id,
+            'phone' => 'nullable|string|max:50',
+            'is_active' => 'required|boolean',
+        ]);
+
+        $tenant->update([
+            'name' => $request->name,
+            'slug' => $request->slug,
+            'contact_name' => $request->contact_name,
+            'email' => $request->email,
+            'phone' => $request->phone,
+            'is_active' => $request->is_active,
+        ]);
+
+        return response()->json([
+            'message' => 'Tenant workspace updated successfully.',
+            'tenant' => $tenant
+        ]);
     }
 
     /**
@@ -399,6 +442,236 @@ class AdminController extends Controller
         $user->delete();
 
         return response()->json(['message' => 'User account deleted successfully.']);
+    }
+
+    /**
+     * Add a WABA channel manually for a tenant (Admin only).
+     */
+    public function storeTenantChannel(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::find($tenantId);
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        $request->validate([
+            'display_name' => 'required|string|max:255',
+            'phone_number' => 'required|string|max:50',
+            'phone_number_id' => 'required|string|max:100',
+            'waba_id' => 'required|string|max:100',
+            'access_token' => 'required|string',
+            'is_active' => 'required|boolean',
+            'is_primary' => 'required|boolean',
+        ]);
+
+        $metaService = resolve(\App\Services\MetaApiService::class);
+        $qualityRating = 'GREEN';
+        $messagingLimit = 'TIER_250';
+
+        try {
+            $phoneNumbers = $metaService->getWabaPhoneNumbers($request->waba_id, $request->access_token);
+            $foundPhone = collect($phoneNumbers)->first(function ($phone) use ($request) {
+                return (string) $phone['id'] === (string) $request->phone_number_id;
+            });
+
+            if ($foundPhone) {
+                $qualityRating = strtoupper($foundPhone['quality_rating'] ?? 'GREEN');
+                $messagingLimit = $foundPhone['messaging_limit_tier'] ?? 'TIER_250';
+            } else {
+                return response()->json([
+                    'error' => 'validation_failed',
+                    'message' => 'The Phone Number ID was not found in the phone numbers list associated with the WABA on Meta.'
+                ], 422);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'meta_api_failed',
+                'message' => 'Failed to connect to Meta API: ' . $e->getMessage()
+            ], 422);
+        }
+
+        if ($request->is_primary) {
+            WabaChannel::withoutGlobalScopes()
+                ->where('tenant_id', $tenantId)
+                ->update(['is_primary' => false]);
+        }
+
+        $channel = WabaChannel::create([
+            'tenant_id' => $tenantId,
+            'display_name' => $request->display_name,
+            'phone_number' => $request->phone_number,
+            'phone_number_id' => $request->phone_number_id,
+            'waba_id' => $request->waba_id,
+            'access_token' => $request->access_token,
+            'is_active' => $request->is_active,
+            'is_primary' => $request->is_primary,
+            'messaging_limit' => $messagingLimit,
+            'quality_rating' => $qualityRating,
+            'connected_at' => now(),
+        ]);
+
+        return response()->json([
+            'message' => 'WABA channel added successfully.',
+            'channel' => $channel
+        ], 201);
+    }
+
+    /**
+     * Update an existing WABA channel details (Admin only).
+     */
+    public function updateChannel(Request $request, $channelId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $channel = WabaChannel::withoutGlobalScopes()->find($channelId);
+        if (!$channel) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'WABA channel not found.'
+            ], 404);
+        }
+
+        $request->validate([
+            'display_name' => 'required|string|max:255',
+            'phone_number' => 'required|string|max:50',
+            'phone_number_id' => 'required|string|max:100',
+            'waba_id' => 'required|string|max:100',
+            'access_token' => 'nullable|string',
+            'is_active' => 'required|boolean',
+            'is_primary' => 'required|boolean',
+        ]);
+
+        $tokenToUse = !empty($request->access_token) ? $request->access_token : $channel->decrypted_token;
+        $metaService = resolve(\App\Services\MetaApiService::class);
+        $qualityRating = $channel->quality_rating;
+        $messagingLimit = $channel->messaging_limit;
+
+        try {
+            $phoneNumbers = $metaService->getWabaPhoneNumbers($request->waba_id, $tokenToUse);
+            $foundPhone = collect($phoneNumbers)->first(function ($phone) use ($request) {
+                return (string) $phone['id'] === (string) $request->phone_number_id;
+            });
+
+            if ($foundPhone) {
+                $qualityRating = strtoupper($foundPhone['quality_rating'] ?? 'GREEN');
+                $messagingLimit = $foundPhone['messaging_limit_tier'] ?? 'TIER_250';
+            } else {
+                return response()->json([
+                    'error' => 'validation_failed',
+                    'message' => 'The Phone Number ID was not found in the phone numbers list associated with the WABA on Meta.'
+                ], 422);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'meta_api_failed',
+                'message' => 'Failed to connect to Meta API: ' . $e->getMessage()
+            ], 422);
+        }
+
+        if ($request->is_primary) {
+            WabaChannel::withoutGlobalScopes()
+                ->where('tenant_id', $channel->tenant_id)
+                ->update(['is_primary' => false]);
+        }
+
+        $updateData = [
+            'display_name' => $request->display_name,
+            'phone_number' => $request->phone_number,
+            'phone_number_id' => $request->phone_number_id,
+            'waba_id' => $request->waba_id,
+            'is_active' => $request->is_active,
+            'is_primary' => $request->is_primary,
+            'messaging_limit' => $messagingLimit,
+            'quality_rating' => $qualityRating,
+        ];
+
+        if (!empty($request->access_token)) {
+            $updateData['access_token'] = $request->access_token;
+        }
+
+        $channel->update($updateData);
+
+        return response()->json([
+            'message' => 'WABA channel updated successfully.',
+            'channel' => $channel
+        ]);
+    }
+
+    /**
+     * Delete/Remove a WABA channel (Admin only).
+     */
+    public function deleteChannel($channelId)
+    {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
+        $channel = WabaChannel::withoutGlobalScopes()->find($channelId);
+        if (!$channel) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'WABA channel not found.'
+            ], 404);
+        }
+
+        $channel->delete();
+
+        return response()->json([
+            'message' => 'WABA channel deleted successfully.'
+        ]);
+    }
+
+    /**
+     * Override WABA webhook subscription for a channel (Admin only).
+     */
+    public function overrideChannelWebhook(Request $request, $channelId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $request->validate([
+            'callback_uri' => 'required|url',
+            'verify_token' => 'required|string|max:255',
+        ]);
+
+        $channel = WabaChannel::withoutGlobalScopes()->find($channelId);
+        if (!$channel) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'WABA channel not found.'
+            ], 404);
+        }
+
+        try {
+            $metaService = resolve(\App\Services\MetaApiService::class);
+            $response = $metaService->overrideWabaWebhook(
+                $channel->waba_id,
+                $channel->decrypted_token,
+                $request->callback_uri,
+                $request->verify_token
+            );
+
+            return response()->json([
+                'message' => 'WABA webhook callback overridden successfully on Meta API.',
+                'meta_response' => $response,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'override_failed',
+                'message' => 'Failed to override WABA webhook: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     private function getChannelHealthIssues(WabaChannel $channel): array

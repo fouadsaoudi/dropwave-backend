@@ -1,0 +1,9 @@
+# WhatsApp Channel Quality Control Instructions
+
+To manually run the quality check for all active WABA channels and send alert emails if any rating is degraded (YELLOW or RED):
+
+```bash
+docker exec dropwave-app php artisan channel:check-quality
+```
+
+*Note: The scheduler is configured to execute this command automatically every hour.*

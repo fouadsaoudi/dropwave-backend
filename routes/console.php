@@ -11,3 +11,7 @@ Artisan::command('inspire', function () {
 Schedule::command('billing:sync-tenant-snapshots')
     ->hourly()
     ->withoutOverlapping();
+
+Schedule::command('channel:check-quality')
+    ->hourly()
+    ->withoutOverlapping();

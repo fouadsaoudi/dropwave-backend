@@ -26,6 +26,11 @@ class TenantBillingSnapshot extends Model
         'is_approximate',
         'template_breakdown',
         'calculated_at',
+        'meta_billable_window_rate',
+        'meta_billable_conversation_cost',
+        'meta_template_cost_total',
+        'meta_total_estimated_cost',
+        'meta_template_breakdown',
     ];
 
     protected $casts = [
@@ -43,6 +48,11 @@ class TenantBillingSnapshot extends Model
         'is_approximate' => 'boolean',
         'template_breakdown' => 'array',
         'calculated_at' => 'datetime',
+        'meta_billable_window_rate' => 'decimal:4',
+        'meta_billable_conversation_cost' => 'decimal:4',
+        'meta_template_cost_total' => 'decimal:4',
+        'meta_total_estimated_cost' => 'decimal:4',
+        'meta_template_breakdown' => 'array',
     ];
 
     public function tenant(): BelongsTo

@@ -11,12 +11,21 @@ class MessageTemplate extends Model
 {
     use BelongsToTenant;
 
-    public const DEFAULT_BILLING_COSTS = [
+    public const ADMIN_DEFAULT_BILLING_COSTS = [
         'MARKETING' => '0.0341',
         'UTILITY' => '0.0091',
         'AUTHENTICATION' => '0.0091',
         'SERVICE' => '0.0000',
     ];
+
+    public const AGENT_DEFAULT_BILLING_COSTS = [
+        'MARKETING' => '0.0400',
+        'UTILITY' => '0.0100',
+        'AUTHENTICATION' => '0.0100',
+        'SERVICE' => '0.0000',
+    ];
+
+    public const DEFAULT_BILLING_COSTS = self::AGENT_DEFAULT_BILLING_COSTS;
 
     protected $fillable = [
         'tenant_id',
@@ -63,6 +72,20 @@ class MessageTemplate extends Model
     {
         $normalizedCategory = strtoupper(trim((string) $category));
 
-        return self::DEFAULT_BILLING_COSTS[$normalizedCategory] ?? '0.0000';
+        return self::AGENT_DEFAULT_BILLING_COSTS[$normalizedCategory] ?? '0.0000';
+    }
+
+    public static function defaultAdminBillingCostForCategory(?string $category): string
+    {
+        $normalizedCategory = strtoupper(trim((string) $category));
+
+        return self::ADMIN_DEFAULT_BILLING_COSTS[$normalizedCategory] ?? '0.0000';
+    }
+
+    public static function defaultAgentBillingCostForCategory(?string $category): string
+    {
+        $normalizedCategory = strtoupper(trim((string) $category));
+
+        return self::AGENT_DEFAULT_BILLING_COSTS[$normalizedCategory] ?? '0.0000';
     }
 }

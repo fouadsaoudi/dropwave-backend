@@ -12,8 +12,8 @@ use Illuminate\Support\Facades\Schema;
 
 class TenantBillingService
 {
-    public const FREE_TIER_LIMIT = 1000;
-    public const BILLABLE_WINDOW_RATE = '0.01';
+    public const FREE_TIER_LIMIT = 0;
+    public const BILLABLE_WINDOW_RATE = '0.015';
 
     public function getMonthlySnapshotSummary(Tenant $tenant, Carbon $month): array
     {
@@ -59,6 +59,11 @@ class TenantBillingService
                 'is_approximate' => $summary['is_approximate'],
                 'template_breakdown' => $summary['template_breakdown'],
                 'calculated_at' => $summary['calculated_at'],
+                'meta_billable_window_rate' => $summary['meta_billable_window_rate'],
+                'meta_billable_conversation_cost' => $summary['meta_billable_conversation_cost'],
+                'meta_template_cost_total' => $summary['meta_template_cost_total'],
+                'meta_total_estimated_cost' => $summary['meta_total_estimated_cost'],
+                'meta_template_breakdown' => $summary['meta_template_breakdown'],
             ]
         );
     }
@@ -103,9 +108,16 @@ class TenantBillingService
         }
 
         $templateBreakdown = [
-            'marketing' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultBillingCostForCategory('MARKETING')],
-            'utility' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultBillingCostForCategory('UTILITY')],
-            'authentication' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultBillingCostForCategory('AUTHENTICATION')],
+            'marketing' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAgentBillingCostForCategory('MARKETING')],
+            'utility' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAgentBillingCostForCategory('UTILITY')],
+            'authentication' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAgentBillingCostForCategory('AUTHENTICATION')],
+            'other' => ['count' => 0, 'cost' => '0.0000', 'rate' => '0.0000'],
+        ];
+
+        $metaTemplateBreakdown = [
+            'marketing' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAdminBillingCostForCategory('MARKETING')],
+            'utility' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAdminBillingCostForCategory('UTILITY')],
+            'authentication' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAdminBillingCostForCategory('AUTHENTICATION')],
             'other' => ['count' => 0, 'cost' => '0.0000', 'rate' => '0.0000'],
         ];
 
@@ -113,6 +125,7 @@ class TenantBillingService
         $billableWindowRate = number_format((float) self::BILLABLE_WINDOW_RATE, 4, '.', '');
         $billableConversationCost = '0.0000';
         $templateCostTotal = '0.0000';
+        $metaTemplateCostTotal = '0.0000';
 
         foreach ($inboundMessages as $message) {
             $sentAt = Carbon::parse($message->sent_at);
@@ -149,14 +162,11 @@ class TenantBillingService
             $template = $message->template;
             if (!$template) {
                 $templateBreakdown['other']['count']++;
+                $metaTemplateBreakdown['other']['count']++;
                 continue;
             }
 
             $category = strtoupper((string) $template->category);
-            $rate = $template->billing_cost !== null
-                ? number_format((float) $template->billing_cost, 4, '.', '')
-                : MessageTemplate::defaultBillingCostForCategory($category);
-
             $bucket = match ($category) {
                 'MARKETING' => 'marketing',
                 'UTILITY' => 'utility',
@@ -164,21 +174,44 @@ class TenantBillingService
                 default => 'other',
             };
 
+            // Agent rate: use stored template cost or default agent rate
+            $agentRate = $template->billing_cost !== null
+                ? number_format((float) $template->billing_cost, 4, '.', '')
+                : MessageTemplate::defaultAgentBillingCostForCategory($category);
+
             $templateBreakdown[$bucket]['count']++;
-            $templateBreakdown[$bucket]['rate'] = $rate;
+            $templateBreakdown[$bucket]['rate'] = $agentRate;
             $templateBreakdown[$bucket]['cost'] = number_format(
-                (float) $templateBreakdown[$bucket]['cost'] + (float) $rate,
+                (float) $templateBreakdown[$bucket]['cost'] + (float) $agentRate,
                 4,
                 '.',
                 ''
             );
-            $templateCostTotal = number_format((float) $templateCostTotal + (float) $rate, 4, '.', '');
+            $templateCostTotal = number_format((float) $templateCostTotal + (float) $agentRate, 4, '.', '');
+
+            // Meta rate: always use default admin rate
+            $metaRate = MessageTemplate::defaultAdminBillingCostForCategory($category);
+
+            $metaTemplateBreakdown[$bucket]['count']++;
+            $metaTemplateBreakdown[$bucket]['rate'] = $metaRate;
+            $metaTemplateBreakdown[$bucket]['cost'] = number_format(
+                (float) $metaTemplateBreakdown[$bucket]['cost'] + (float) $metaRate,
+                4,
+                '.',
+                ''
+            );
+            $metaTemplateCostTotal = number_format((float) $metaTemplateCostTotal + (float) $metaRate, 4, '.', '');
         }
 
         $freeTierRemaining = max(0, self::FREE_TIER_LIMIT - $conversationSessions);
         $billableConversations = max(0, $conversationSessions - self::FREE_TIER_LIMIT);
         $billableConversationCost = number_format($billableConversations * (float) $billableWindowRate, 4, '.', '');
         $totalEstimatedCost = number_format((float) $templateCostTotal + (float) $billableConversationCost, 4, '.', '');
+
+        // Meta (Facebook) actual expenses
+        $metaBillableWindowRate = number_format(0.01, 4, '.', '');
+        $metaBillableConversationCost = number_format($conversationSessions * 0.01, 4, '.', '');
+        $metaTotalEstimatedCost = number_format((float) $metaTemplateCostTotal + (float) $metaBillableConversationCost, 4, '.', '');
 
         return [
             'billing_month' => $month->copy()->startOfMonth()->toDateString(),
@@ -195,6 +228,12 @@ class TenantBillingService
             'is_approximate' => true,
             'template_breakdown' => $templateBreakdown,
             'calculated_at' => now()->toDateTimeString(),
+
+            'meta_billable_window_rate' => $metaBillableWindowRate,
+            'meta_billable_conversation_cost' => $metaBillableConversationCost,
+            'meta_template_cost_total' => $metaTemplateCostTotal,
+            'meta_total_estimated_cost' => $metaTotalEstimatedCost,
+            'meta_template_breakdown' => $metaTemplateBreakdown,
         ];
     }
 
@@ -215,6 +254,12 @@ class TenantBillingService
             'is_approximate' => (bool) $snapshot->is_approximate,
             'template_breakdown' => $snapshot->template_breakdown ?? [],
             'calculated_at' => optional($snapshot->calculated_at)->toDateTimeString(),
+
+            'meta_billable_window_rate' => number_format((float) ($snapshot->meta_billable_window_rate ?? 0.0100), 4, '.', ''),
+            'meta_billable_conversation_cost' => number_format((float) ($snapshot->meta_billable_conversation_cost ?? 0.0000), 4, '.', ''),
+            'meta_template_cost_total' => number_format((float) ($snapshot->meta_template_cost_total ?? 0.0000), 4, '.', ''),
+            'meta_total_estimated_cost' => number_format((float) ($snapshot->meta_total_estimated_cost ?? 0.0000), 4, '.', ''),
+            'meta_template_breakdown' => $snapshot->meta_template_breakdown ?? [],
         ];
     }
 }

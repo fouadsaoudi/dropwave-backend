@@ -89,6 +89,22 @@ class AdminController extends Controller
 
         $healthyChannelsCount = $channels->count() - $problematicChannels->count();
 
+        // Calculate billing overview totals
+        $billingService = resolve(\App\Services\TenantBillingService::class);
+        $tenants = Tenant::all();
+        $now = \Carbon\Carbon::now();
+        
+        $totalAgentBilling = 0;
+        $totalMetaBilling = 0;
+        
+        foreach ($tenants as $tenant) {
+            $summary = $billingService->getMonthlySnapshotSummary($tenant, $now);
+            $totalAgentBilling += (float) ($summary['total_estimated_cost'] ?? 0);
+            $totalMetaBilling += (float) ($summary['meta_total_estimated_cost'] ?? 0);
+        }
+        
+        $totalProfit = $totalAgentBilling - $totalMetaBilling;
+
         return response()->json([
             'tenants_count' => $tenantCount,
             'channels_count' => $channels->count(),
@@ -97,6 +113,9 @@ class AdminController extends Controller
             'contacts_count' => Contact::withoutGlobalScopes()->count(),
             'conversations_count' => Conversation::withoutGlobalScopes()->count(),
             'problematic_channels' => $problematicChannels,
+            'current_month_agent_expenses' => number_format($totalAgentBilling, 4, '.', ''),
+            'current_month_meta_expenses' => number_format($totalMetaBilling, 4, '.', ''),
+            'current_month_profit' => number_format($totalProfit, 4, '.', ''),
         ]);
     }
 
@@ -109,8 +128,27 @@ class AdminController extends Controller
             return $response;
         }
 
+        $billingService = resolve(\App\Services\TenantBillingService::class);
         $tenants = Tenant::withCount('channels')
             ->get(['id', 'name', 'slug', 'contact_name', 'email', 'phone', 'is_active', 'created_at']);
+
+        $billingMonthStr = $request->input('billing_month');
+        $month = $billingMonthStr 
+            ? \Carbon\Carbon::parse($billingMonthStr)->startOfMonth() 
+            : \Carbon\Carbon::now()->startOfMonth();
+
+        foreach ($tenants as $tenant) {
+            $summary = $billingService->getMonthlySnapshotSummary($tenant, $month);
+            $tenant->current_billing = [
+                'total_estimated_cost' => $summary['total_estimated_cost'] ?? '0.0000',
+                'meta_total_estimated_cost' => $summary['meta_total_estimated_cost'] ?? '0.0000',
+                'conversation_sessions_count' => $summary['conversation_sessions_count'] ?? 0,
+                'billable_conversations_count' => $summary['billable_conversations_count'] ?? 0,
+                'template_cost_total' => $summary['template_cost_total'] ?? '0.0000',
+                'meta_template_cost_total' => $summary['meta_template_cost_total'] ?? '0.0000',
+                'calculated_at' => $summary['calculated_at'] ?? null,
+            ];
+        }
 
         return response()->json($tenants);
     }
@@ -220,6 +258,7 @@ class AdminController extends Controller
             'total_messages_sent' => $totalMessagesSent,
             'current_month_messages_sent' => $currentMonthMessagesSent,
             'current_expenses' => $billing['total_estimated_cost'],
+            'meta_expenses' => $billing['meta_total_estimated_cost'] ?? '0.0000',
             'channels' => $channels,
             'billing' => array_merge($billing, ['currency' => 'USD']),
         ]);

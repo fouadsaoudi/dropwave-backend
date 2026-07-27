@@ -19,6 +19,8 @@ class ListTenantsRequest extends FormRequest
      */
     public function rules(): array
     {
-        return [];
+        return [
+            'billing_month' => 'nullable|date_format:Y-m',
+        ];
     }
 }

@@ -51,7 +51,7 @@ class Message extends Model
         }
 
         $hash = hash_hmac('sha256', $this->id, config('app.key'));
-        return "/media/proxy?message_id={$this->id}&hash={$hash}";
+        return "/api/media/proxy?message_id={$this->id}&hash={$hash}";
     }
 
     public function tenant(): BelongsTo

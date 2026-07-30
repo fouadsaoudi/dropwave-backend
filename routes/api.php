@@ -25,6 +25,8 @@ Route::get('/media/proxy', [\App\Http\Controllers\Api\MediaController::class, 'p
 Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/me', [AuthController::class, 'me']);
+    Route::post('/user/fcm-token', [AuthController::class, 'updateFcmToken']);
+    Route::delete('/user/fcm-token', [AuthController::class, 'removeFcmToken']);
 
     // Channels
     Route::get('/channels', [ChannelController::class, 'index']);

@@ -54,6 +54,11 @@ class User extends Authenticatable
         return $this->hasMany(Conversation::class, 'assigned_to');
     }
 
+    public function fcmTokens(): HasMany
+    {
+        return $this->hasMany(UserFcmToken::class);
+    }
+
     public function isAdmin(): bool
     {
         return $this->role?->name === 'admin';

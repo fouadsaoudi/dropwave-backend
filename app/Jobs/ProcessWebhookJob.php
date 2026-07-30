@@ -77,7 +77,7 @@ class ProcessWebhookJob implements ShouldQueue
             $field = $change['field'] ?? null;
             if ($field === 'phone_number_quality_update') {
                 $newRating = $value['new_quality_rating'] ?? null;
-                if ($newRating && in_array(strtoupper($newRating), ['GREEN', 'YELLOW', 'RED'])) {
+                if ($newRating && in_array(strtoupper($newRating), ['GREEN', 'YELLOW', 'RED', 'UNKNOWN'])) {
                     $oldRating = $channel->quality_rating;
                     $newRatingUpper = strtoupper($newRating);
 

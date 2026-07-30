@@ -30,7 +30,7 @@ class ConversationController extends Controller
      */
     public function index(ListConversationsRequest $request)
     {
-        $query = Conversation::with(['contact', 'assignee']);
+        $query = Conversation::with(['contact', 'assignee', 'channel']);
 
         // Filter by status if provided
         if ($request->has('status')) {
@@ -90,13 +90,30 @@ class ConversationController extends Controller
             ], 404);
         }
 
-        $messages = Message::where('conversation_id', $id)
-            ->orderBy('created_at', 'asc')
-            ->get();
+        $query = Message::where('conversation_id', $id);
+
+        if ($request->has('before_id')) {
+            $query->where('id', '<', $request->before_id);
+        }
+
+        $messages = $query->orderBy('id', 'desc')
+            ->limit(15)
+            ->get()
+            ->reverse()
+            ->values();
+
+        $hasMore = false;
+        if ($messages->isNotEmpty()) {
+            $oldestId = $messages->first()->id;
+            $hasMore = Message::where('conversation_id', $id)
+                ->where('id', '<', $oldestId)
+                ->exists();
+        }
 
         return response()->json([
             'conversation' => $conversation,
-            'messages' => $messages
+            'messages' => $messages,
+            'has_more' => $hasMore
         ]);
     }
 

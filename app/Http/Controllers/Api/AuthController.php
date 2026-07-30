@@ -34,10 +34,15 @@ class AuthController extends Controller
             ]);
         }
 
-        // Regenerate session to prevent session fixation attacks
-        $request->session()->regenerate();
+        // Regenerate session to prevent session fixation attacks if web session exists
+        if ($request->hasSession()) {
+            $request->session()->regenerate();
+        }
+
+        $token = $user->createToken('mobile-app')->plainTextToken;
 
         return response()->json([
+            'token' => $token,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -58,10 +63,18 @@ class AuthController extends Controller
      */
     public function logout(Request $request)
     {
-        Auth::logout();
+        if ($request->user()?->currentAccessToken()) {
+            $request->user()->currentAccessToken()->delete();
+        }
 
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+        if (Auth::guard('web')->check()) {
+            Auth::guard('web')->logout();
+        }
+
+        if ($request->hasSession()) {
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
         return response()->json([
             'message' => 'Logged out successfully.'
@@ -81,6 +94,54 @@ class AuthController extends Controller
             'role' => $user->role?->name,
             'tenant_id' => $user->tenant_id,
             'tenant' => $user->tenant,
+            'fcm_tokens_count' => $user->fcmTokens()->count(),
+        ]);
+    }
+
+    /**
+     * Register or update a user FCM token for mobile push notifications.
+     */
+    public function updateFcmToken(Request $request)
+    {
+        $request->validate([
+            'fcm_token' => 'required|string',
+            'device_type' => 'nullable|string',
+        ]);
+
+        $user = $request->user();
+
+        $tokenRecord = \App\Models\UserFcmToken::updateOrCreate(
+            [
+                'user_id' => $user->id,
+                'fcm_token' => $request->fcm_token,
+            ],
+            [
+                'device_type' => $request->device_type ?? 'mobile',
+                'last_used_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'message' => 'FCM token registered successfully.',
+            'fcm_token' => $tokenRecord->fcm_token,
+            'device_type' => $tokenRecord->device_type,
+        ]);
+    }
+
+    /**
+     * Remove an FCM token when a user logs out from a device.
+     */
+    public function removeFcmToken(Request $request)
+    {
+        $request->validate([
+            'fcm_token' => 'required|string',
+        ]);
+
+        $user = $request->user();
+        $user->fcmTokens()->where('fcm_token', $request->fcm_token)->delete();
+
+        return response()->json([
+            'message' => 'FCM token removed successfully.'
         ]);
     }
 }

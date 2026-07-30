@@ -84,6 +84,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/admin/channels/{channelId}/override-webhook', [AdminController::class, 'overrideChannelWebhook']);
     Route::get('/admin/tenants/{tenantId}/details', [AdminController::class, 'getTenantDetails']);
     Route::post('/admin/tenants/{tenantId}/recalculate-expenses', [AdminController::class, 'recalculateTenantExpenses']);
+    Route::post('/admin/tenants/{tenantId}/payment-status', [AdminController::class, 'updateTenantPaymentStatus']);
     Route::get('/admin/users', [AdminController::class, 'listUsers']);
     Route::post('/admin/users', [AdminController::class, 'storeUser']);
     Route::put('/admin/users/{id}', [AdminController::class, 'updateUser']);

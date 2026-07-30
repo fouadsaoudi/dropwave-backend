@@ -258,9 +258,13 @@ class ProcessWebhookJob implements ShouldQueue
 
             // 4. Create Notification
             if (!$isStale) {
+                $displaySender = ($contact->name && $contact->name !== $fromNumber)
+                    ? "{$contact->name} ({$fromNumber})"
+                    : $fromNumber;
+
                 \App\Models\Notification::withoutGlobalScopes()->create([
                     'tenant_id' => $channel->tenant_id,
-                    'sender' => $contact->name ?: $fromNumber,
+                    'sender' => $displaySender,
                     'message_body' => $lastMessageBody,
                     'conversation_id' => $conversation->id,
                     'is_read' => false,

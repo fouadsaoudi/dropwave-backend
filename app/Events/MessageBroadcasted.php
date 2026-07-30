@@ -43,4 +43,27 @@ class MessageBroadcasted implements ShouldBroadcastNow
     {
         return 'message.broadcasted';
     }
+
+    /**
+     * Get the data to broadcast.
+     *
+     * @return array<string, mixed>
+     */
+    public function broadcastWith(): array
+    {
+        $messageData = $this->message->toArray();
+
+        $conversation = $this->message->conversation 
+            ?? \App\Models\Conversation::withoutGlobalScopes()->find($this->message->conversation_id);
+
+        $contact = $conversation?->contact 
+            ?? ($conversation ? \App\Models\Contact::withoutGlobalScopes()->find($conversation->contact_id) : null);
+
+        $messageData['contact_name'] = $contact?->name;
+        $messageData['contact_phone'] = $contact?->phone_number;
+
+        return [
+            'message' => $messageData,
+        ];
+    }
 }

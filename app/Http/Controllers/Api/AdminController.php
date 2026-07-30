@@ -96,11 +96,27 @@ class AdminController extends Controller
         
         $totalAgentBilling = 0;
         $totalMetaBilling = 0;
+        $totalPaidRevenue = 0;
+        $totalUnpaidRevenue = 0;
+        $paidTenantsCount = 0;
+        $unpaidTenantsCount = 0;
         
         foreach ($tenants as $tenant) {
             $summary = $billingService->getMonthlySnapshotSummary($tenant, $now);
-            $totalAgentBilling += (float) ($summary['total_estimated_cost'] ?? 0);
-            $totalMetaBilling += (float) ($summary['meta_total_estimated_cost'] ?? 0);
+            $agentCost = (float) ($summary['total_estimated_cost'] ?? 0);
+            $metaCost = (float) ($summary['meta_total_estimated_cost'] ?? 0);
+            $status = $summary['payment_status'] ?? 'unpaid';
+
+            $totalAgentBilling += $agentCost;
+            $totalMetaBilling += $metaCost;
+
+            if ($status === 'paid') {
+                $totalPaidRevenue += (float) ($summary['amount_paid'] ?? $agentCost);
+                $paidTenantsCount++;
+            } else {
+                $totalUnpaidRevenue += $agentCost;
+                $unpaidTenantsCount++;
+            }
         }
         
         $totalProfit = $totalAgentBilling - $totalMetaBilling;
@@ -116,6 +132,65 @@ class AdminController extends Controller
             'current_month_agent_expenses' => number_format($totalAgentBilling, 4, '.', ''),
             'current_month_meta_expenses' => number_format($totalMetaBilling, 4, '.', ''),
             'current_month_profit' => number_format($totalProfit, 4, '.', ''),
+            'current_month_paid_revenue' => number_format($totalPaidRevenue, 4, '.', ''),
+            'current_month_unpaid_revenue' => number_format($totalUnpaidRevenue, 4, '.', ''),
+            'paid_tenants_count' => $paidTenantsCount,
+            'unpaid_tenants_count' => $unpaidTenantsCount,
+        ]);
+    }
+
+    /**
+     * Update tenant billing payment status for a specific month (Admin only).
+     */
+    public function updateTenantPaymentStatus(Request $request, $tenantId, TenantBillingService $billingService)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        $validated = $request->validate([
+            'payment_status' => 'required|in:unpaid,paid',
+            'billing_month' => 'nullable|date_format:Y-m',
+            'amount_paid' => 'nullable|numeric|min:0',
+            'payment_notes' => 'nullable|string|max:1000',
+        ]);
+
+        $monthStr = $validated['billing_month'] ?? now()->format('Y-m');
+        $month = \Carbon\Carbon::createFromFormat('Y-m', $monthStr)->startOfMonth();
+
+        // Ensure snapshot exists
+        $snapshot = $billingService->syncMonthlySnapshot($tenant, $month);
+
+        $status = $validated['payment_status'];
+        $amountPaid = isset($validated['amount_paid']) 
+            ? (float) $validated['amount_paid'] 
+            : ($status === 'paid' ? (float) $snapshot->total_estimated_cost : 0.0000);
+
+        $snapshot->update([
+            'payment_status' => $status,
+            'paid_at' => $status === 'paid' ? ($snapshot->paid_at ?: now()) : null,
+            'amount_paid' => $amountPaid,
+            'payment_notes' => $validated['payment_notes'] ?? $snapshot->payment_notes,
+        ]);
+
+        $summary = $billingService->getMonthlySnapshotSummary($tenant, $month);
+
+        return response()->json([
+            'message' => 'Tenant payment status updated successfully.',
+            'tenant' => [
+                'id' => $tenant->id,
+                'name' => $tenant->name,
+            ],
+            'billing' => $summary,
         ]);
     }
 
@@ -139,15 +214,7 @@ class AdminController extends Controller
 
         foreach ($tenants as $tenant) {
             $summary = $billingService->getMonthlySnapshotSummary($tenant, $month);
-            $tenant->current_billing = [
-                'total_estimated_cost' => $summary['total_estimated_cost'] ?? '0.0000',
-                'meta_total_estimated_cost' => $summary['meta_total_estimated_cost'] ?? '0.0000',
-                'conversation_sessions_count' => $summary['conversation_sessions_count'] ?? 0,
-                'billable_conversations_count' => $summary['billable_conversations_count'] ?? 0,
-                'template_cost_total' => $summary['template_cost_total'] ?? '0.0000',
-                'meta_template_cost_total' => $summary['meta_template_cost_total'] ?? '0.0000',
-                'calculated_at' => $summary['calculated_at'] ?? null,
-            ];
+            $tenant->current_billing = $summary;
         }
 
         return response()->json($tenants);

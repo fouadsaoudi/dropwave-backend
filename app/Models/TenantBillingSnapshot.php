@@ -31,6 +31,11 @@ class TenantBillingSnapshot extends Model
         'meta_template_cost_total',
         'meta_total_estimated_cost',
         'meta_template_breakdown',
+        'channels_breakdown',
+        'payment_status',
+        'paid_at',
+        'amount_paid',
+        'payment_notes',
     ];
 
     protected $casts = [
@@ -53,6 +58,9 @@ class TenantBillingSnapshot extends Model
         'meta_template_cost_total' => 'decimal:4',
         'meta_total_estimated_cost' => 'decimal:4',
         'meta_template_breakdown' => 'array',
+        'channels_breakdown' => 'array',
+        'paid_at' => 'datetime',
+        'amount_paid' => 'decimal:4',
     ];
 
     public function tenant(): BelongsTo

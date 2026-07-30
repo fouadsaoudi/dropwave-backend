@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\MessageTemplate;
 use App\Models\Tenant;
 use App\Models\TenantBillingSnapshot;
+use App\Models\WabaChannel;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -38,33 +40,49 @@ class TenantBillingService
             throw new \RuntimeException('tenant_billing_snapshots table is missing. Run migrations before syncing billing snapshots.');
         }
 
+        $billingMonthStr = $month->copy()->startOfMonth()->toDateString();
         $summary = $this->calculateMonthSummary($tenant, $month->copy()->startOfMonth());
 
-        return TenantBillingSnapshot::query()->updateOrCreate(
+        $existing = TenantBillingSnapshot::withoutGlobalScopes()
+            ->where('tenant_id', $tenant->id)
+            ->whereDate('billing_month', $billingMonthStr)
+            ->first();
+
+        $updateData = [
+            'period_start' => $summary['period_start'],
+            'period_end' => $summary['period_end'],
+            'conversation_sessions_count' => $summary['conversation_sessions_count'],
+            'free_tier_limit' => $summary['free_tier_limit'],
+            'free_tier_remaining' => $summary['free_tier_remaining'],
+            'billable_conversations_count' => $summary['billable_conversations_count'],
+            'billable_window_rate' => $summary['billable_window_rate'],
+            'billable_conversation_cost' => $summary['billable_conversation_cost'],
+            'template_cost_total' => $summary['template_cost_total'],
+            'total_estimated_cost' => $summary['total_estimated_cost'],
+            'is_approximate' => $summary['is_approximate'],
+            'template_breakdown' => $summary['template_breakdown'],
+            'calculated_at' => $summary['calculated_at'],
+            'meta_billable_window_rate' => $summary['meta_billable_window_rate'],
+            'meta_billable_conversation_cost' => $summary['meta_billable_conversation_cost'],
+            'meta_template_cost_total' => $summary['meta_template_cost_total'],
+            'meta_total_estimated_cost' => $summary['meta_total_estimated_cost'],
+            'meta_template_breakdown' => $summary['meta_template_breakdown'],
+            'channels_breakdown' => $summary['channels_breakdown'] ?? [],
+        ];
+
+        if ($existing) {
+            $updateData['payment_status'] = $existing->payment_status ?? 'unpaid';
+            $updateData['paid_at'] = $existing->paid_at;
+            $updateData['amount_paid'] = $existing->amount_paid ?? 0.0000;
+            $updateData['payment_notes'] = $existing->payment_notes;
+        }
+
+        return TenantBillingSnapshot::withoutGlobalScopes()->updateOrCreate(
             [
                 'tenant_id' => $tenant->id,
-                'billing_month' => $summary['billing_month'],
+                'billing_month' => $billingMonthStr,
             ],
-            [
-                'period_start' => $summary['period_start'],
-                'period_end' => $summary['period_end'],
-                'conversation_sessions_count' => $summary['conversation_sessions_count'],
-                'free_tier_limit' => $summary['free_tier_limit'],
-                'free_tier_remaining' => $summary['free_tier_remaining'],
-                'billable_conversations_count' => $summary['billable_conversations_count'],
-                'billable_window_rate' => $summary['billable_window_rate'],
-                'billable_conversation_cost' => $summary['billable_conversation_cost'],
-                'template_cost_total' => $summary['template_cost_total'],
-                'total_estimated_cost' => $summary['total_estimated_cost'],
-                'is_approximate' => $summary['is_approximate'],
-                'template_breakdown' => $summary['template_breakdown'],
-                'calculated_at' => $summary['calculated_at'],
-                'meta_billable_window_rate' => $summary['meta_billable_window_rate'],
-                'meta_billable_conversation_cost' => $summary['meta_billable_conversation_cost'],
-                'meta_template_cost_total' => $summary['meta_template_cost_total'],
-                'meta_total_estimated_cost' => $summary['meta_total_estimated_cost'],
-                'meta_template_breakdown' => $summary['meta_template_breakdown'],
-            ]
+            $updateData
         );
     }
 
@@ -79,32 +97,72 @@ class TenantBillingService
             });
         };
 
-        $inboundMessages = Message::query()
+        // Resolve active tenant channels
+        $channels = WabaChannel::withoutGlobalScopes()
+            ->where('tenant_id', $tenant->id)
+            ->get(['id', 'display_name', 'phone_number']);
+
+        $channelMap = [];
+        foreach ($channels as $ch) {
+            $channelMap[(int) $ch->id] = [
+                'channel_id' => (int) $ch->id,
+                'display_name' => $ch->display_name ?: ('Channel #' . $ch->id),
+                'phone_number' => $ch->phone_number ?: 'N/A',
+                'conversation_sessions_count' => 0,
+                'billable_conversations_count' => 0,
+                'billable_conversation_cost' => '0.0000',
+                'template_cost_total' => '0.0000',
+                'total_estimated_cost' => '0.0000',
+                'meta_billable_conversation_cost' => '0.0000',
+                'meta_template_cost_total' => '0.0000',
+                'meta_total_estimated_cost' => '0.0000',
+            ];
+        }
+
+        // Map conversations to channel_id
+        $conversations = Conversation::withoutGlobalScopes()
+            ->where('tenant_id', $tenant->id)
+            ->pluck('channel_id', 'id');
+
+        $inboundMessages = Message::withoutGlobalScopes()
             ->where('tenant_id', $tenant->id)
             ->where('direction', 'inbound')
             ->where('status', '!=', 'failed')
-            ->whereBetween('sent_at', [$periodStart, $periodEnd])
+            ->where(function ($q) use ($periodStart, $periodEnd) {
+                $q->whereBetween('sent_at', [$periodStart, $periodEnd])
+                  ->orWhere(function ($q2) use ($periodStart, $periodEnd) {
+                      $q2->whereNull('sent_at')
+                         ->whereBetween('created_at', [$periodStart, $periodEnd]);
+                  });
+            })
             ->orderBy('conversation_id')
-            ->orderBy('sent_at')
+            ->orderBy(DB::raw('COALESCE(sent_at, created_at)'))
             ->orderBy('id')
             ->get([
                 'id',
                 'conversation_id',
                 'sent_at',
+                'created_at',
             ]);
 
-        $previousInboundAt = Message::query()
+        $previousInboundAt = Message::withoutGlobalScopes()
             ->where('tenant_id', $tenant->id)
             ->where('direction', 'inbound')
             ->where('status', '!=', 'failed')
-            ->where('sent_at', '<', $periodStart)
-            ->select('conversation_id', DB::raw('MAX(sent_at) as last_inbound_at'))
+            ->where(function ($q) use ($periodStart) {
+                $q->where('sent_at', '<', $periodStart)
+                  ->orWhere(function ($q2) use ($periodStart) {
+                      $q2->whereNull('sent_at')
+                         ->where('created_at', '<', $periodStart);
+                  });
+            })
+            ->select('conversation_id', DB::raw('MAX(COALESCE(sent_at, created_at)) as last_inbound_at'))
             ->groupBy('conversation_id')
             ->pluck('last_inbound_at', 'conversation_id');
 
-        $lastInboundByConversation = [];
+        $windowStartByConversation = [];
         foreach ($previousInboundAt as $conversationId => $lastInboundAt) {
-            $lastInboundByConversation[(int) $conversationId] = Carbon::parse($lastInboundAt);
+            $windowStartByConversation[(int) $conversationId] = Carbon::parse($lastInboundAt);
         }
 
         $templateBreakdown = [
@@ -123,43 +181,58 @@ class TenantBillingService
 
         $conversationSessions = 0;
         $billableWindowRate = number_format((float) self::BILLABLE_WINDOW_RATE, 4, '.', '');
-        $billableConversationCost = '0.0000';
         $templateCostTotal = '0.0000';
         $metaTemplateCostTotal = '0.0000';
 
         foreach ($inboundMessages as $message) {
-            $sentAt = Carbon::parse($message->sent_at);
+            $sentAt = Carbon::parse($message->sent_at ?? $message->created_at);
             $conversationId = (int) $message->conversation_id;
-            $lastInboundAt = $lastInboundByConversation[$conversationId] ?? null;
+            $channelId = isset($conversations[$conversationId]) ? (int) $conversations[$conversationId] : null;
+            $windowStart = $windowStartByConversation[$conversationId] ?? null;
 
-            if (!$lastInboundAt || $sentAt->greaterThanOrEqualTo($lastInboundAt->copy()->addHours(24))) {
+            if (!$windowStart || $sentAt->greaterThanOrEqualTo($windowStart->copy()->addHours(24))) {
                 $conversationSessions++;
-            }
+                $windowStartByConversation[$conversationId] = $sentAt;
 
-            $lastInboundByConversation[$conversationId] = $sentAt;
+                if ($channelId && isset($channelMap[$channelId])) {
+                    $channelMap[$channelId]['conversation_sessions_count']++;
+                }
+            }
         }
 
-        $templateMessages = Message::query()
-            ->with(['template:id,category,billing_cost'])
+        $templateMessages = Message::withoutGlobalScopes()
+            ->with(['template:id,category,billing_cost,channel_id'])
             ->where('tenant_id', $tenant->id)
             ->where('direction', 'outbound')
             ->where('status', '!=', 'failed')
-            ->whereBetween('sent_at', [$periodStart, $periodEnd])
+            ->where(function ($q) use ($periodStart, $periodEnd) {
+                $q->whereBetween('sent_at', [$periodStart, $periodEnd])
+                  ->orWhere(function ($q2) use ($periodStart, $periodEnd) {
+                      $q2->whereNull('sent_at')
+                         ->whereBetween('created_at', [$periodStart, $periodEnd]);
+                  });
+            })
             ->where($excludeFailedTemplateMessages)
             ->orderBy('conversation_id')
-            ->orderBy('sent_at')
+            ->orderBy(DB::raw('COALESCE(sent_at, created_at)'))
             ->orderBy('id')
             ->get([
                 'id',
                 'conversation_id',
                 'template_id',
                 'sent_at',
+                'created_at',
                 'status',
                 'error_message',
             ]);
 
         foreach ($templateMessages as $message) {
             $template = $message->template;
+            $conversationId = (int) $message->conversation_id;
+            $channelId = isset($conversations[$conversationId]) 
+                ? (int) $conversations[$conversationId] 
+                : ($template ? (int) $template->channel_id : null);
+
             if (!$template) {
                 $templateBreakdown['other']['count']++;
                 $metaTemplateBreakdown['other']['count']++;
@@ -201,7 +274,43 @@ class TenantBillingService
                 ''
             );
             $metaTemplateCostTotal = number_format((float) $metaTemplateCostTotal + (float) $metaRate, 4, '.', '');
+
+            if ($channelId && isset($channelMap[$channelId])) {
+                $channelMap[$channelId]['template_cost_total'] = number_format(
+                    (float) $channelMap[$channelId]['template_cost_total'] + (float) $agentRate,
+                    4,
+                    '.',
+                    ''
+                );
+                $channelMap[$channelId]['meta_template_cost_total'] = number_format(
+                    (float) $channelMap[$channelId]['meta_template_cost_total'] + (float) $metaRate,
+                    4,
+                    '.',
+                    ''
+                );
+            }
         }
+
+        // Format per-channel breakdown metrics
+        foreach ($channelMap as $cId => &$cData) {
+            $cSessions = (int) $cData['conversation_sessions_count'];
+            $cData['billable_conversations_count'] = $cSessions;
+            $cData['billable_conversation_cost'] = number_format($cSessions * (float) $billableWindowRate, 4, '.', '');
+            $cData['meta_billable_conversation_cost'] = number_format($cSessions * 0.01, 4, '.', '');
+            $cData['total_estimated_cost'] = number_format(
+                (float) $cData['template_cost_total'] + (float) $cData['billable_conversation_cost'],
+                4,
+                '.',
+                ''
+            );
+            $cData['meta_total_estimated_cost'] = number_format(
+                (float) $cData['meta_template_cost_total'] + (float) $cData['meta_billable_conversation_cost'],
+                4,
+                '.',
+                ''
+            );
+        }
+        unset($cData);
 
         $freeTierRemaining = max(0, self::FREE_TIER_LIMIT - $conversationSessions);
         $billableConversations = max(0, $conversationSessions - self::FREE_TIER_LIMIT);
@@ -234,6 +343,12 @@ class TenantBillingService
             'meta_template_cost_total' => $metaTemplateCostTotal,
             'meta_total_estimated_cost' => $metaTotalEstimatedCost,
             'meta_template_breakdown' => $metaTemplateBreakdown,
+            'channels_breakdown' => array_values($channelMap),
+            'channels_count' => count($channelMap),
+            'payment_status' => 'unpaid',
+            'paid_at' => null,
+            'amount_paid' => '0.0000',
+            'payment_notes' => null,
         ];
     }
 
@@ -260,6 +375,12 @@ class TenantBillingService
             'meta_template_cost_total' => number_format((float) ($snapshot->meta_template_cost_total ?? 0.0000), 4, '.', ''),
             'meta_total_estimated_cost' => number_format((float) ($snapshot->meta_total_estimated_cost ?? 0.0000), 4, '.', ''),
             'meta_template_breakdown' => $snapshot->meta_template_breakdown ?? [],
+            'channels_breakdown' => $snapshot->channels_breakdown ?? [],
+            'channels_count' => is_array($snapshot->channels_breakdown) ? count($snapshot->channels_breakdown) : 0,
+            'payment_status' => $snapshot->payment_status ?? 'unpaid',
+            'paid_at' => optional($snapshot->paid_at)->toDateTimeString(),
+            'amount_paid' => number_format((float) ($snapshot->amount_paid ?? 0.0000), 4, '.', ''),
+            'payment_notes' => $snapshot->payment_notes,
         ];
     }
 }

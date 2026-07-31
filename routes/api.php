@@ -83,6 +83,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::delete('/admin/channels/{channelId}', [AdminController::class, 'deleteChannel']);
     Route::post('/admin/channels/{channelId}/override-webhook', [AdminController::class, 'overrideChannelWebhook']);
     Route::get('/admin/tenants/{tenantId}/details', [AdminController::class, 'getTenantDetails']);
+    Route::get('/admin/tenants/{tenantId}/template-messages', [AdminController::class, 'getTenantTemplateMessages']);
     Route::post('/admin/tenants/{tenantId}/recalculate-expenses', [AdminController::class, 'recalculateTenantExpenses']);
     Route::post('/admin/tenants/{tenantId}/payment-status', [AdminController::class, 'updateTenantPaymentStatus']);
     Route::get('/admin/users', [AdminController::class, 'listUsers']);

@@ -7,12 +7,14 @@ use App\Jobs\RecalculateTenantExpensesJob;
 use App\Models\Contact;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\MessageTemplate;
 use App\Models\Tenant;
 use App\Models\WabaChannel;
 use App\Models\User;
 use App\Services\TenantBillingService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use App\Http\Requests\ListTenantsRequest;
 use App\Http\Requests\ListTenantChannelsRequest;
 use App\Http\Requests\Admin\RecalculateTenantExpensesRequest;
@@ -832,5 +834,93 @@ class AdminController extends Controller
         }
 
         return 'healthy';
+    }
+
+    /**
+     * Get list of sent template messages for a tenant in a billing month (Admin only).
+     */
+    public function getTenantTemplateMessages(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::find($tenantId);
+
+        if (!$tenant) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Tenant not found.'
+            ], 404);
+        }
+
+        $billingMonthStr = $request->input('billing_month') ?: now()->format('Y-m');
+        $month = Carbon::parse($billingMonthStr)->startOfMonth();
+        $periodStart = $month->copy()->startOfMonth()->startOfDay();
+        $periodEnd = $month->copy()->endOfMonth()->endOfDay();
+
+        $excludeFailedTemplateMessages = function ($query) {
+            $query->where(function ($nested) {
+                $nested->whereNull('template_id')
+                    ->orWhereNull('error_message');
+            });
+        };
+
+        $messages = Message::withoutGlobalScopes()
+            ->with([
+                'template:id,name,category,billing_cost,channel_id',
+                'conversation.contact:id,name,phone_number',
+                'conversation.channel:id,display_name,phone_number'
+            ])
+            ->where('tenant_id', $tenant->id)
+            ->where('direction', 'outbound')
+            ->whereNotNull('template_id')
+            ->where('status', '!=', 'failed')
+            ->where(function ($q) use ($periodStart, $periodEnd) {
+                $q->whereBetween('sent_at', [$periodStart, $periodEnd])
+                  ->orWhere(function ($q2) use ($periodStart, $periodEnd) {
+                      $q2->whereNull('sent_at')
+                         ->whereBetween('created_at', [$periodStart, $periodEnd]);
+                  });
+            })
+            ->where($excludeFailedTemplateMessages)
+            ->orderBy(DB::raw('COALESCE(sent_at, created_at)'), 'desc')
+            ->get();
+
+        $items = $messages->map(function ($msg) {
+            $template = $msg->template;
+            $category = strtoupper((string) ($template?->category ?? 'OTHER'));
+            
+            $agentRate = $template && $template->billing_cost !== null
+                ? number_format((float) $template->billing_cost, 4, '.', '')
+                : MessageTemplate::defaultAgentBillingCostForCategory($category);
+
+            $metaRate = MessageTemplate::defaultAdminBillingCostForCategory($category);
+
+            return [
+                'id' => $msg->id,
+                'template_id' => $msg->template_id,
+                'template_name' => $template?->name ?? 'N/A',
+                'category' => $category,
+                'sent_at' => optional($msg->sent_at ?? $msg->created_at)->toDateTimeString(),
+                'contact_name' => $msg->conversation?->contact?->name ?? 'N/A',
+                'contact_phone' => $msg->conversation?->contact?->phone_number ?? 'N/A',
+                'channel_name' => $msg->conversation?->channel?->display_name ?? 'N/A',
+                'client_cost' => $agentRate,
+                'meta_cost' => $metaRate,
+                'status' => $msg->status,
+                'message_preview' => mb_strimwidth((string) $msg->body, 0, 80, '...'),
+            ];
+        });
+
+        return response()->json([
+            'tenant' => [
+                'id' => $tenant->id,
+                'name' => $tenant->name,
+            ],
+            'billing_month' => $month->format('Y-m'),
+            'total_count' => $items->count(),
+            'messages' => $items,
+        ]);
     }
 }

@@ -20,7 +20,12 @@ class TenantBillingService
     public function getMonthlySnapshotSummary(Tenant $tenant, Carbon $month): array
     {
         $billingMonth = $month->copy()->startOfMonth();
+
         if (Schema::hasTable('tenant_billing_snapshots')) {
+            if ($billingMonth->isCurrentMonth()) {
+                return $this->snapshotToArray($this->syncMonthlySnapshot($tenant, $billingMonth));
+            }
+
             $snapshot = TenantBillingSnapshot::query()
                 ->where('tenant_id', $tenant->id)
                 ->whereDate('billing_month', $billingMonth->toDateString())

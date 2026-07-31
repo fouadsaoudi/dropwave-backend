@@ -96,6 +96,7 @@ class AdminController extends Controller
         
         $totalAgentBilling = 0;
         $totalMetaBilling = 0;
+        $totalRealMetaBilling = 0;
         $totalPaidRevenue = 0;
         $totalUnpaidRevenue = 0;
         $paidTenantsCount = 0;
@@ -105,10 +106,12 @@ class AdminController extends Controller
             $summary = $billingService->getMonthlySnapshotSummary($tenant, $now);
             $agentCost = (float) ($summary['total_estimated_cost'] ?? 0);
             $metaCost = (float) ($summary['meta_total_estimated_cost'] ?? 0);
+            $realMetaCost = (float) ($summary['meta_template_cost_total'] ?? 0);
             $status = $summary['payment_status'] ?? 'unpaid';
 
             $totalAgentBilling += $agentCost;
             $totalMetaBilling += $metaCost;
+            $totalRealMetaBilling += $realMetaCost;
 
             if ($status === 'paid') {
                 $totalPaidRevenue += (float) ($summary['amount_paid'] ?? $agentCost);
@@ -119,7 +122,7 @@ class AdminController extends Controller
             }
         }
         
-        $totalProfit = $totalAgentBilling - $totalMetaBilling;
+        $totalProfit = $totalAgentBilling - $totalRealMetaBilling;
 
         return response()->json([
             'tenants_count' => $tenantCount,

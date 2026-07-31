@@ -21,7 +21,7 @@ class SendMessageRequest extends FormRequest
     {
         return [
             'body' => 'required_without:file|nullable|string|max:4000',
-            'file' => 'required_without:body|nullable|file|image|max:15360', // max 15MB
+            'file' => 'required_without:body|nullable|file|mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,jpeg,jpg,png,webp,aac,mp3,m4a,amr,ogg,opus,mp4,3gp|max:13312', // max 13MB
         ];
     }
 }

@@ -28,4 +28,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*'),
         );
+        $exceptions->render(function (\Illuminate\Http\Exceptions\PostTooLargeException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'error' => 'file_too_large',
+                    'message' => 'The uploaded file is too large. Server post_max_size limit exceeded.'
+                ], 413);
+            }
+        });
     })->create();

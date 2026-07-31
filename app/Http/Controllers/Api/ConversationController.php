@@ -234,12 +234,29 @@ class ConversationController extends Controller
         $mediaMimeType = null;
         $mediaFilename = null;
         $whatsappMsgId = null;
+        $msgType = 'text';
 
         try {
             if ($hasFile) {
                 $file = $request->file('file');
-                $mediaMimeType = $file->getClientMimeType();
+                $mediaMimeType = $file->getClientMimeType() ?: 'application/octet-stream';
                 $mediaFilename = $file->getClientOriginalName();
+
+                // Determine message media type
+                if (str_starts_with($mediaMimeType, 'image/') && $mediaMimeType !== 'image/svg+xml') {
+                    $msgType = 'image';
+                } elseif (str_starts_with($mediaMimeType, 'video/')) {
+                    $msgType = 'video';
+                } elseif (str_starts_with($mediaMimeType, 'audio/')) {
+                    $msgType = 'audio';
+                } else {
+                    $msgType = 'document';
+                }
+                
+                // Map CSV mime types to text/plain for Meta API compatibility
+                $metaUploadMimeType = in_array($mediaMimeType, ['text/csv', 'application/csv', 'text/x-csv'])
+                    ? 'text/plain'
+                    : $mediaMimeType;
                 
                 // Store local copy on server
                 $storedPath = $file->store('media', 'public');
@@ -251,27 +268,52 @@ class ConversationController extends Controller
                 // 2.a. Upload media to Meta
                 $uploadResponse = $this->metaService->uploadMedia(
                     $channel->decrypted_token,
-                    $phoneNumberId = $channel->phone_number_id,
+                    $channel->phone_number_id,
                     $absolutePath,
-                    $mediaMimeType
+                    $metaUploadMimeType
                 );
-                
+
                 $metaMediaId = $uploadResponse['id'] ?? null;
                 if (!$metaMediaId) {
                     throw new \Exception('Meta upload did not return a valid media ID');
                 }
                 
-                // 2.b. Dispatch image message using Meta WhatsApp Business API
-                $metaResponse = $this->metaService->sendImageMessage(
-                    $channel->decrypted_token,
-                    $channel->phone_number_id,
-                    $contact->phone_number,
-                    $metaMediaId,
-                    $request->body // caption
-                );
+                // 2.b. Dispatch media message using Meta WhatsApp Business API based on type
+                if ($msgType === 'image') {
+                    $metaResponse = $this->metaService->sendImageMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $contact->phone_number,
+                        $metaMediaId,
+                        $request->body // caption
+                    );
+                } elseif ($msgType === 'video') {
+                    $metaResponse = $this->metaService->sendVideoMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $contact->phone_number,
+                        $metaMediaId,
+                        $request->body // caption
+                    );
+                } elseif ($msgType === 'audio') {
+                    $metaResponse = $this->metaService->sendAudioMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $contact->phone_number,
+                        $metaMediaId
+                    );
+                } else {
+                    $metaResponse = $this->metaService->sendDocumentMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $contact->phone_number,
+                        $metaMediaId,
+                        $mediaFilename,
+                        $request->body // caption
+                    );
+                }
                 
                 $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
-                $mediaFilename = $metaMediaId; // Use the meta media ID as our reference
             } else {
                 // 2. Dispatch standard text message using Meta WhatsApp Business API
                 $metaResponse = $this->metaService->sendTextMessage(
@@ -289,7 +331,7 @@ class ConversationController extends Controller
                 'tenant_id' => $conversation->tenant_id,
                 'conversation_id' => $conversation->id,
                 'direction' => 'outbound',
-                'type' => $hasFile ? 'image' : 'text',
+                'type' => $msgType,
                 'body' => $request->body,
                 'media_url' => $mediaPath,
                 'media_mime_type' => $mediaMimeType,
@@ -301,8 +343,16 @@ class ConversationController extends Controller
             ]);
 
             // 4. Update conversation metadata
+            $lastSnippet = match ($msgType) {
+                'image' => '📷 Photo',
+                'video' => '🎥 Video',
+                'audio' => '🎵 Audio',
+                'document' => '📄 ' . ($mediaFilename ?: 'File'),
+                default => $request->body,
+            };
+
             $conversation->update([
-                'last_message_body' => $hasFile ? '📷 Photo' : $request->body,
+                'last_message_body' => $lastSnippet,
                 'last_message_at' => now(),
             ]);
 
@@ -319,8 +369,8 @@ class ConversationController extends Controller
 
             return response()->json([
                 'error' => 'failed_send',
-                'message' => 'Failed to transmit message to Meta WhatsApp Gateway.'
-            ], 500);
+                'message' => $e->getMessage()
+            ], 422);
         }
     }
 

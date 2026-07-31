@@ -8,6 +8,8 @@ services:
     volumes:
       - .:/var/www
       - ./docker/app/supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:ro
+      - ./docker/app/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ./docker/app/99-uploads.ini:/usr/local/etc/php/conf.d/99-uploads.ini:ro
     depends_on:
       - mysql
       - redis

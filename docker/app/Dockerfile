@@ -23,6 +23,10 @@ RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 # Install Redis extension
 RUN pecl install redis && docker-php-ext-enable redis
 
+# Configure custom PHP file upload limits
+COPY docker/app/uploads.ini $PHP_INI_DIR/conf.d/uploads.ini
+COPY docker/app/99-uploads.ini $PHP_INI_DIR/conf.d/99-uploads.ini
+
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 

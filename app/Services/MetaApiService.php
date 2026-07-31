@@ -364,4 +364,103 @@ class MetaApiService
 
         return $response->json();
     }
+
+    /**
+     * Send a document message using a Meta media ID.
+     */
+    public function sendDocumentMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, string $filename, ?string $caption = null): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'document',
+            'document' => [
+                'id' => $mediaId,
+                'filename' => $filename,
+            ]
+        ];
+
+        if ($caption) {
+            $payload['document']['caption'] = $caption;
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp document message via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send document message failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Send a video message using a Meta media ID.
+     */
+    public function sendVideoMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $caption = null): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'video',
+            'video' => [
+                'id' => $mediaId
+            ]
+        ];
+
+        if ($caption) {
+            $payload['video']['caption'] = $caption;
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp video message via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send video message failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Send an audio message using a Meta media ID.
+     */
+    public function sendAudioMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'audio',
+            'audio' => [
+                'id' => $mediaId
+            ]
+        ];
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp audio message via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send audio message failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
 }

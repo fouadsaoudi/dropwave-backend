@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     nginx \
     libzip-dev \
-    procps
+    procps \
+    ffmpeg
 
 # Clear cache
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*

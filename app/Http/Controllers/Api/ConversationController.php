@@ -258,12 +258,49 @@ class ConversationController extends Controller
                     ? 'text/plain'
                     : $mediaMimeType;
                 
-                // Store local copy on server
-                $storedPath = $file->store('media', 'public');
+                // Store local copy on server with correct file extension
+                $extension = $file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'bin';
+                if ($mediaMimeType === 'audio/mp4' && $extension === 'mp4') {
+                    $extension = 'm4a';
+                }
+                $storedPath = $file->storeAs('media', uniqid() . '.' . $extension, 'public');
                 $mediaPath = 'storage/' . $storedPath;
                 
                 // Absolute path to upload to Meta
                 $absolutePath = storage_path('app/public/' . $storedPath);
+
+                // Transcode recorded/voice-note audio to OGG/Opus so WhatsApp displays it natively as a playable voice note waveform
+                if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg']))) {
+                    $transcodedPath = 'media/' . uniqid() . '.ogg';
+                    $absoluteTranscodedPath = storage_path('app/public/' . $transcodedPath);
+
+                    // Convert to standard OGG/Opus (mono, 32k bitrate) for native WhatsApp voice note rendering
+                    $result = \Illuminate\Support\Facades\Process::run([
+                        'ffmpeg', '-y', '-i', $absolutePath,
+                        '-c:a', 'libopus',
+                        '-b:a', '32k',
+                        '-ac', '1',
+                        '-application', 'voip',
+                        $absoluteTranscodedPath
+                    ]);
+
+                    if ($result->successful() && file_exists($absoluteTranscodedPath)) {
+                        @unlink($absolutePath); // Delete the original file
+                        
+                        $storedPath = $transcodedPath;
+                        $mediaPath = 'storage/' . $storedPath;
+                        $absolutePath = $absoluteTranscodedPath;
+                        $mediaMimeType = 'audio/ogg';
+                        $metaUploadMimeType = 'audio/ogg';
+                        $mediaFilename = 'voice_record.ogg';
+                    } else {
+                        Log::error("FFmpeg transcoding failed", [
+                            'exit_code' => $result->exitCode(),
+                            'output' => $result->output(),
+                            'error' => $result->errorOutput()
+                        ]);
+                    }
+                }
                 
                 // 2.a. Upload media to Meta
                 $uploadResponse = $this->metaService->uploadMedia(

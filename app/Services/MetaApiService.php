@@ -310,14 +310,19 @@ class MetaApiService
     public function uploadMedia(string $accessToken, string $phoneNumberId, string $filePath, string $mimeType): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/media";
+        // Meta's multipart `type` field accepts a media type, not MIME
+        // parameters. In particular, sending `audio/ogg; codecs=opus` causes
+        // Meta to process the upload as application/octet-stream even when the
+        // OGG file itself is a valid Opus stream.
+        $uploadMimeType = trim(explode(';', $mimeType, 2)[0]);
 
         $response = Http::withToken($accessToken)
             ->attach('file', file_get_contents($filePath), basename($filePath), [
-                'Content-Type' => $mimeType
+                'Content-Type' => $uploadMimeType
             ])
             ->post($url, [
                 'messaging_product' => 'whatsapp',
-                'type' => $mimeType
+                'type' => $uploadMimeType
             ]);
 
         if ($response->failed()) {
@@ -437,7 +442,7 @@ class MetaApiService
     /**
      * Send an audio message using a Meta media ID.
      */
-    public function sendAudioMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId): array
+    public function sendAudioMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, bool $isVoiceMessage = false): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
@@ -450,6 +455,12 @@ class MetaApiService
                 'id' => $mediaId
             ]
         ];
+
+        // This turns an Ogg/Opus recording into a WhatsApp voice message rather
+        // than a basic audio attachment. Basic audio intentionally omits this.
+        if ($isVoiceMessage) {
+            $payload['audio']['voice'] = true;
+        }
 
         $response = Http::withToken($accessToken)->post($url, $payload);
 

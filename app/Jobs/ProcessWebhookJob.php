@@ -321,7 +321,9 @@ class ProcessWebhookJob implements ShouldQueue
             $errors = $status['errors'][0] ?? null;
             if ($errors) {
                 $updateData['error_code'] = $errors['code'] ?? null;
-                $updateData['error_message'] = $errors['message'] ?? null;
+                $updateData['error_message'] = data_get($errors, 'error_data.details')
+                    ?? $errors['message']
+                    ?? null;
             }
         }
 

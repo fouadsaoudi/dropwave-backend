@@ -235,12 +235,14 @@ class ConversationController extends Controller
         $mediaFilename = null;
         $whatsappMsgId = null;
         $msgType = 'text';
+        $isVoiceMessage = false;
 
         try {
             if ($hasFile) {
                 $file = $request->file('file');
                 $mediaMimeType = $file->getClientMimeType() ?: 'application/octet-stream';
                 $mediaFilename = $file->getClientOriginalName();
+                $isVoiceMessage = str_starts_with(strtolower($mediaFilename), 'voice_record');
 
                 // Determine message media type
                 if (str_starts_with($mediaMimeType, 'image/') && $mediaMimeType !== 'image/svg+xml') {
@@ -274,13 +276,19 @@ class ConversationController extends Controller
                     $transcodedPath = 'media/' . uniqid() . '.ogg';
                     $absoluteTranscodedPath = storage_path('app/public/' . $transcodedPath);
 
-                    // Convert to standard OGG/Opus (mono, 32k bitrate) for native WhatsApp voice note rendering
+                    // Convert to a WhatsApp-compatible OGG/Opus voice note. Browser recordings
+                    // can carry a tiny negative initial timestamp; WhatsApp renders the voice
+                    // bubble but may fail to open the media unless the output starts at zero.
                     $result = \Illuminate\Support\Facades\Process::run([
                         'ffmpeg', '-y', '-i', $absolutePath,
+                        '-map', '0:a:0',
+                        '-vn',
+                        '-af', 'aresample=async=1:first_pts=0',
                         '-c:a', 'libopus',
-                        '-b:a', '32k',
+                        '-b:a', '64k',
                         '-ac', '1',
                         '-application', 'voip',
+                        '-f', 'ogg',
                         $absoluteTranscodedPath
                     ]);
 
@@ -290,6 +298,9 @@ class ConversationController extends Controller
                         $storedPath = $transcodedPath;
                         $mediaPath = 'storage/' . $storedPath;
                         $absolutePath = $absoluteTranscodedPath;
+                        // WhatsApp accepts OGG only when its stream is Opus. The Opus codec is
+                        // determined from the transcoded file itself; the upload MIME must stay
+                        // the base type (audio/ogg), not include a codecs parameter.
                         $mediaMimeType = 'audio/ogg';
                         $metaUploadMimeType = 'audio/ogg';
                         $mediaFilename = 'voice_record.ogg';
@@ -337,7 +348,8 @@ class ConversationController extends Controller
                         $channel->decrypted_token,
                         $channel->phone_number_id,
                         $contact->phone_number,
-                        $metaMediaId
+                        $metaMediaId,
+                        $isVoiceMessage
                     );
                 } else {
                     $metaResponse = $this->metaService->sendDocumentMessage(

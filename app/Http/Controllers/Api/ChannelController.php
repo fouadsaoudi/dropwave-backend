@@ -9,6 +9,7 @@ use App\Models\WabaChannel;
 use Exception;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
 
 use App\Http\Requests\ConnectChannelRequest;
 
@@ -220,6 +221,66 @@ class ChannelController extends Controller
             return response()->json([
                 'error' => 'override_failed',
                 'message' => 'Failed to override WABA webhook: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Toggle calling status locally and on Meta API settings.
+     */
+    public function toggleCalling(Request $request, $id)
+    {
+        $tenantId = $request->get('tenant_id');
+        $channel = WabaChannel::where('tenant_id', $tenantId)->findOrFail($id);
+
+        $newStatus = !$channel->calling_enabled;
+        $statusStr = $newStatus ? 'ENABLED' : 'DISABLED';
+
+        try {
+            $apiVersion = config('services.meta.api_version', 'v23.0');
+            $url = "https://graph.facebook.com/{$apiVersion}/{$channel->phone_number_id}/settings";
+
+            Log::info("Toggling WABA channel {$channel->id} calling setting on Meta to {$statusStr}");
+
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $channel->decrypted_token,
+                'Content-Type' => 'application/json',
+            ])->post($url, [
+                'calling' => [
+                    'status' => $statusStr,
+                ]
+            ]);
+
+            if (!$response->successful()) {
+                Log::error("Failed to update calling settings on Meta API", [
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+                
+                return response()->json([
+                    'error' => 'meta_sync_failed',
+                    'message' => 'Failed to synchronize setting with Meta API: ' . ($response->json('error.message') ?? 'Unknown error'),
+                ], 400);
+            }
+
+            $channel->update([
+                'calling_enabled' => $newStatus
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Calling successfully " . ($newStatus ? 'enabled' : 'disabled') . ".",
+                'calling_enabled' => $newStatus,
+            ]);
+
+        } catch (Exception $e) {
+            Log::error("Exception toggling call status for channel {$channel->id}", [
+                'message' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'error' => 'toggle_failed',
+                'message' => $e->getMessage()
             ], 500);
         }
     }

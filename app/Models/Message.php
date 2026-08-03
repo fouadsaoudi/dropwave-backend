@@ -13,6 +13,7 @@ class Message extends Model
     protected $fillable = [
         'tenant_id',
         'conversation_id',
+        'call_id',
         'direction',
         'type',
         'body',
@@ -67,6 +68,11 @@ class Message extends Model
     public function template(): BelongsTo
     {
         return $this->belongsTo(MessageTemplate::class, 'template_id');
+    }
+
+    public function call(): BelongsTo
+    {
+        return $this->belongsTo(Call::class, 'call_id');
     }
 
     public function sender(): BelongsTo

@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Exception;
+use Illuminate\Support\Facades\Http;
 
 class ProcessWebhookJob implements ShouldQueue
 {
@@ -114,6 +115,13 @@ class ProcessWebhookJob implements ShouldQueue
             if (isset($value['statuses']) && is_array($value['statuses'])) {
                 foreach ($value['statuses'] as $status) {
                     $this->processMessageStatusUpdate($status);
+                }
+            }
+
+            // Process Call Events
+            if ($field === 'calls' || (isset($value['calls']) && is_array($value['calls']))) {
+                foreach ($value['calls'] as $callData) {
+                    $this->processCallEvent($callData, $channel);
                 }
             }
 
@@ -360,5 +368,267 @@ class ProcessWebhookJob implements ShouldQueue
             default:
                 return '✉️ Message';
         }
+    }
+
+    /**
+     * Process WhatsApp Calling API events.
+     */
+    protected function processCallEvent(array $callData, WabaChannel $channel): void
+    {
+        $callId = $callData['id'] ?? null;
+        $event = $callData['event'] ?? '';
+        $session = $callData['session'] ?? null;
+
+        if (!$callId) {
+            return;
+        }
+
+        DB::transaction(function () use ($callId, $event, $session, $callData, $channel) {
+            $call = \App\Models\Call::withoutGlobalScopes()
+                ->where('whatsapp_call_id', $callId)
+                ->first();
+
+            if ($event === 'connect' && (!$call || ($callData['direction'] ?? '') === 'USER_INITIATED')) {
+                // Inbound call
+                $from = $callData['from'] ?? null;
+                if (!$from) return;
+
+                $fromNumber = '+' . ltrim($from, '+');
+                $waId = $from;
+                $timestamp = now();
+
+                // Check if calling is disabled for this channel
+                if (!$channel->calling_enabled) {
+                    Log::info("Rejecting incoming call {$callId} for WABA channel {$channel->id} (calling is disabled).");
+
+                    $apiVersion = config('services.meta.api_version', 'v23.0');
+                    $url = "https://graph.facebook.com/{$apiVersion}/{$channel->phone_number_id}/calls";
+
+                    Http::withHeaders([
+                        'Authorization' => 'Bearer ' . $channel->decrypted_token,
+                        'Content-Type' => 'application/json',
+                    ])->post($url, [
+                        'messaging_product' => 'whatsapp',
+                        'call_id' => $callId,
+                        'action' => 'reject',
+                    ]);
+
+                    // Still record a declined/missed call log for history
+                    $call = \App\Models\Call::create([
+                        'tenant_id' => $channel->tenant_id,
+                        'conversation_id' => 0, // temporary
+                        'direction' => 'inbound',
+                        'whatsapp_call_id' => $callId,
+                        'status' => 'missed',
+                        'ended_at' => $timestamp,
+                        'duration_seconds' => 0,
+                    ]);
+
+                    // Resolve Contact
+                    $contact = Contact::withoutGlobalScopes()->where([
+                        'tenant_id' => $channel->tenant_id,
+                        'phone_number' => $fromNumber,
+                    ])->first() ?: Contact::create([
+                        'tenant_id' => $channel->tenant_id,
+                        'phone_number' => $fromNumber,
+                        'whatsapp_id' => $waId,
+                        'name' => null,
+                        'last_seen_at' => $timestamp,
+                    ]);
+
+                    // Resolve Conversation
+                    $conversation = Conversation::withoutGlobalScopes()->where([
+                        'tenant_id' => $channel->tenant_id,
+                        'contact_id' => $contact->id,
+                        'channel_id' => $channel->id,
+                    ])->whereIn('status', ['open', 'resolved'])->first() ?: Conversation::withoutGlobalScopes()->create([
+                        'tenant_id' => $channel->tenant_id,
+                        'contact_id' => $contact->id,
+                        'channel_id' => $channel->id,
+                        'status' => 'open',
+                        'window_expires_at' => $timestamp->copy()->addHours(24),
+                        'last_message_at' => $timestamp,
+                        'last_message_body' => '📞 Missed Call (Calling Disabled)',
+                        'unread_count' => 1,
+                    ]);
+
+                    $call->update(['conversation_id' => $conversation->id]);
+
+                    $message = Message::create([
+                        'tenant_id' => $channel->tenant_id,
+                        'conversation_id' => $conversation->id,
+                        'call_id' => $call->id,
+                        'direction' => 'inbound',
+                        'type' => 'call',
+                        'body' => '📞 Incoming Call: Missed (Calling Disabled)',
+                        'status' => 'delivered',
+                        'sent_at' => $timestamp,
+                    ]);
+
+                    broadcast(new \App\Events\MessageBroadcasted($message));
+                    broadcast(new \App\Events\ConversationUpdated($conversation));
+                    return;
+                }
+
+                // 1. Resolve Contact
+                $contact = Contact::withoutGlobalScopes()->where([
+                    'tenant_id' => $channel->tenant_id,
+                    'phone_number' => $fromNumber,
+                ])->first();
+
+                if (!$contact) {
+                    $contact = Contact::create([
+                        'tenant_id' => $channel->tenant_id,
+                        'phone_number' => $fromNumber,
+                        'whatsapp_id' => $waId,
+                        'name' => null,
+                        'last_seen_at' => $timestamp,
+                    ]);
+                }
+
+                // 2. Resolve Conversation
+                $conversation = Conversation::withoutGlobalScopes()->where([
+                    'tenant_id' => $channel->tenant_id,
+                    'contact_id' => $contact->id,
+                    'channel_id' => $channel->id,
+                ])->whereIn('status', ['open', 'resolved'])->first();
+
+                if (!$conversation) {
+                    $conversation = Conversation::withoutGlobalScopes()->create([
+                        'tenant_id' => $channel->tenant_id,
+                        'contact_id' => $contact->id,
+                        'channel_id' => $channel->id,
+                        'status' => 'open',
+                        'window_expires_at' => $timestamp->copy()->addHours(24),
+                        'last_message_at' => $timestamp,
+                        'last_message_body' => '📞 Incoming Voice Call',
+                        'unread_count' => 1,
+                    ]);
+                } else {
+                    $conversation->update([
+                        'status' => 'open',
+                        'last_message_at' => $timestamp,
+                        'last_message_body' => '📞 Incoming Voice Call',
+                        'unread_count' => $conversation->unread_count + 1,
+                    ]);
+                }
+
+                // 3. Create Call record
+                $call = \App\Models\Call::create([
+                    'tenant_id' => $channel->tenant_id,
+                    'conversation_id' => $conversation->id,
+                    'direction' => 'inbound',
+                    'whatsapp_call_id' => $callId,
+                    'status' => 'ringing',
+                    'started_at' => null,
+                ]);
+
+                // 4. Create Message entry
+                $message = Message::create([
+                    'tenant_id' => $channel->tenant_id,
+                    'conversation_id' => $conversation->id,
+                    'call_id' => $call->id,
+                    'direction' => 'inbound',
+                    'type' => 'call',
+                    'body' => 'Incoming Voice Call',
+                    'status' => 'delivered',
+                    'sent_at' => $timestamp,
+                ]);
+
+                // Broadcast WebRTC session with offer
+                broadcast(new \App\Events\CallBroadcasted($call, $session));
+                broadcast(new \App\Events\MessageBroadcasted($message));
+                broadcast(new \App\Events\ConversationUpdated($conversation));
+                return;
+            }
+
+            if (!$call) {
+                return;
+            }
+
+            $conversation = $call->conversation;
+
+            if ($event === 'connect') {
+                $call->update([
+                    'status' => 'connected',
+                    'started_at' => $call->started_at ?? now(),
+                ]);
+                broadcast(new \App\Events\CallBroadcasted($call, $session));
+            } elseif ($event === 'terminate') {
+                $endedAt = now();
+                $startedAt = $call->started_at;
+                $duration = isset($callData['duration']) ? (int) $callData['duration'] : ($startedAt ? $endedAt->diffInSeconds($startedAt) : 0);
+                
+                // Determine billing rate based on country code
+                $phone = $conversation->contact->phone_number;
+                $cleanPhone = preg_replace('/\D/', '', $phone);
+                $rates = config('calling_rates.default');
+                
+                foreach ([3, 2, 1] as $len) {
+                    $prefix = substr($cleanPhone, 0, $len);
+                    if (config("calling_rates.{$prefix}")) {
+                        $rates = config("calling_rates.{$prefix}");
+                        break;
+                    }
+                }
+
+                $status = 'completed';
+                if ($duration <= 0) {
+                    $status = $call->direction === 'inbound' ? 'missed' : 'failed';
+                }
+
+                $call->update([
+                    'status' => $status,
+                    'ended_at' => $endedAt,
+                    'duration_seconds' => $duration,
+                    'rate_per_minute' => $rates['agent_rate'],
+                    'cost' => 0,
+                    'meta_cost' => 0,
+                ]);
+
+                // Calculate costs using pulse rules
+                if ($call->direction === 'outbound' && $duration > 0) {
+                    $pulses = ceil($duration / 6);
+                    $call->cost = $pulses * ($rates['agent_rate'] / 10);
+                    $call->meta_cost = $pulses * ($rates['meta_rate'] / 10);
+                    $call->save();
+                }
+
+                // Format call display details
+                $dirText = $call->direction === 'inbound' ? 'Incoming Call' : 'Outgoing Call';
+                $statusText = $status === 'completed' ? 'Connected (' . gmdate("i:s", $duration) . ')' : ucfirst($status);
+                $messageBody = "📞 {$dirText}: {$statusText}";
+
+                // Create or update call log message
+                $message = Message::withoutGlobalScopes()->where('call_id', $call->id)->first();
+                if ($message) {
+                    $message->update([
+                        'body' => $messageBody,
+                        'status' => 'delivered',
+                    ]);
+                } else {
+                    $message = Message::create([
+                        'tenant_id' => $call->tenant_id,
+                        'conversation_id' => $call->conversation_id,
+                        'call_id' => $call->id,
+                        'direction' => $call->direction,
+                        'type' => 'call',
+                        'body' => $messageBody,
+                        'status' => 'delivered',
+                        'sent_at' => $endedAt,
+                    ]);
+                }
+
+                // Update conversation preview text
+                $conversation->update([
+                    'last_message_body' => $messageBody,
+                    'last_message_at' => $endedAt,
+                ]);
+
+                broadcast(new \App\Events\CallBroadcasted($call));
+                broadcast(new \App\Events\MessageBroadcasted($message));
+                broadcast(new \App\Events\ConversationUpdated($conversation));
+            }
+        });
     }
 }

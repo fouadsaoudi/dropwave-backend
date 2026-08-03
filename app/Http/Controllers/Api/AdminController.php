@@ -11,6 +11,7 @@ use App\Models\MessageTemplate;
 use App\Models\Tenant;
 use App\Models\WabaChannel;
 use App\Models\User;
+use App\Models\Role;
 use App\Services\TenantBillingService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -385,6 +386,18 @@ class AdminController extends Controller
     }
 
     /**
+     * List all system roles (Admin only).
+     */
+    public function listRoles()
+    {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
+        return response()->json(Role::get(['id', 'name']));
+    }
+
+    /**
      * Store/Create a new Tenant workspace (Admin only).
      */
     public function storeTenant(Request $request)
@@ -466,7 +479,7 @@ class AdminController extends Controller
         }
 
         $request->validate([
-            'tenant_id' => 'required|exists:tenants,id',
+            'tenant_id' => 'nullable|exists:tenants,id',
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email|max:255',
             'password' => 'required|string|min:6',
@@ -503,12 +516,16 @@ class AdminController extends Controller
         }
 
         $request->validate([
+            'tenant_id' => 'nullable|exists:tenants,id',
             'name' => 'sometimes|required|string|max:255',
             'role_id' => 'sometimes|required|exists:roles,id',
             'is_active' => 'sometimes|required|boolean',
             'password' => 'nullable|string|min:6',
         ]);
 
+        if ($request->has('tenant_id') || $request->exists('tenant_id')) {
+            $user->tenant_id = $request->tenant_id;
+        }
         if ($request->has('name')) {
             $user->name = $request->name;
         }

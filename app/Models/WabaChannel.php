@@ -21,6 +21,7 @@ class WabaChannel extends Model
         'messaging_limit',
         'is_active',
         'is_primary',
+        'calling_enabled',
         'connected_at',
         'token_expires_at',
     ];
@@ -28,6 +29,7 @@ class WabaChannel extends Model
     protected $casts = [
         'is_active' => 'boolean',
         'is_primary' => 'boolean',
+        'calling_enabled' => 'boolean',
         'connected_at' => 'datetime',
         'token_expires_at' => 'datetime',
     ];

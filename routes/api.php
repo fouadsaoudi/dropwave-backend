@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\WebhookController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\ConversationController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\CallController;
 
 // Public routes
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -33,6 +34,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/channels/connect', [ChannelController::class, 'connect']);
     Route::post('/channels/manual', [ChannelController::class, 'connectManual']);
     Route::post('/channels/{id}/override-webhook', [ChannelController::class, 'overrideWebhook']);
+    Route::post('/channels/{id}/toggle-calling', [ChannelController::class, 'toggleCalling']);
 
     // Conversations
     Route::get('/conversations', [ConversationController::class, 'index']);
@@ -44,6 +46,13 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/messages', [ConversationController::class, 'sendMessage']);
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
     Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);
+
+    // Calling
+    Route::get('/conversations/{id}/calls', [CallController::class, 'index']);
+    Route::post('/conversations/{id}/call/initiate', [CallController::class, 'initiate']);
+    Route::post('/conversations/{id}/call/accept', [CallController::class, 'accept']);
+    Route::post('/conversations/{id}/call/terminate', [CallController::class, 'terminate']);
+    Route::post('/conversations/{id}/call/reject', [CallController::class, 'reject']);
 
     // Contacts
     Route::get('/contacts', [\App\Http\Controllers\Api\ContactController::class, 'index']);
@@ -86,6 +95,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/admin/tenants/{tenantId}/template-messages', [AdminController::class, 'getTenantTemplateMessages']);
     Route::post('/admin/tenants/{tenantId}/recalculate-expenses', [AdminController::class, 'recalculateTenantExpenses']);
     Route::post('/admin/tenants/{tenantId}/payment-status', [AdminController::class, 'updateTenantPaymentStatus']);
+    Route::get('/admin/roles', [AdminController::class, 'listRoles']);
     Route::get('/admin/users', [AdminController::class, 'listUsers']);
     Route::post('/admin/users', [AdminController::class, 'storeUser']);
     Route::put('/admin/users/{id}', [AdminController::class, 'updateUser']);

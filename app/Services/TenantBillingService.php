@@ -296,20 +296,86 @@ class TenantBillingService
             }
         }
 
+        // Fetch all calls for this tenant in the target month
+        $calls = \App\Models\Call::withoutGlobalScopes()
+            ->where('tenant_id', $tenant->id)
+            ->whereBetween('created_at', [$periodStart, $periodEnd])
+            ->get();
+
+        $callCostTotal = 0.0000;
+        $metaCallCostTotal = 0.0000;
+        $callsBreakdown = [
+            'total_calls' => 0,
+            'total_duration_seconds' => 0,
+            'inbound_calls_count' => 0,
+            'outbound_calls_count' => 0,
+        ];
+
+        // Track calls per channel
+        foreach ($calls as $call) {
+            $callCost = (float) $call->cost;
+            $metaCost = (float) $call->meta_cost;
+
+            $callCostTotal += $callCost;
+            $metaCallCostTotal += $metaCost;
+
+            $callsBreakdown['total_calls']++;
+            $callsBreakdown['total_duration_seconds'] += $call->duration_seconds;
+            if ($call->direction === 'inbound') {
+                $callsBreakdown['inbound_calls_count']++;
+            } else {
+                $callsBreakdown['outbound_calls_count']++;
+            }
+
+            $conversationId = (int) $call->conversation_id;
+            $channelId = isset($conversations[$conversationId]) ? (int) $conversations[$conversationId] : null;
+            if ($channelId && isset($channelMap[$channelId])) {
+                if (!isset($channelMap[$channelId]['call_cost_total'])) {
+                    $channelMap[$channelId]['call_cost_total'] = '0.0000';
+                    $channelMap[$channelId]['meta_call_cost_total'] = '0.0000';
+                    $channelMap[$channelId]['calls_count'] = 0;
+                    $channelMap[$channelId]['calls_duration_seconds'] = 0;
+                }
+                $channelMap[$channelId]['call_cost_total'] = number_format(
+                    (float) $channelMap[$channelId]['call_cost_total'] + $callCost,
+                    4,
+                    '.',
+                    ''
+                );
+                $channelMap[$channelId]['meta_call_cost_total'] = number_format(
+                    (float) $channelMap[$channelId]['meta_call_cost_total'] + $metaCost,
+                    4,
+                    '.',
+                    ''
+                );
+                $channelMap[$channelId]['calls_count']++;
+                $channelMap[$channelId]['calls_duration_seconds'] += $call->duration_seconds;
+            }
+        }
+
         // Format per-channel breakdown metrics
         foreach ($channelMap as $cId => &$cData) {
             $cSessions = (int) $cData['conversation_sessions_count'];
             $cData['billable_conversations_count'] = $cSessions;
             $cData['billable_conversation_cost'] = number_format($cSessions * (float) $billableWindowRate, 4, '.', '');
             $cData['meta_billable_conversation_cost'] = number_format($cSessions * 0.01, 4, '.', '');
+
+            // Add default call properties to channel data if not already set
+            if (!isset($cData['call_cost_total'])) {
+                $cData['call_cost_total'] = '0.0000';
+                $cData['meta_call_cost_total'] = '0.0000';
+                $cData['calls_count'] = 0;
+                $cData['calls_duration_seconds'] = 0;
+            }
+
             $cData['total_estimated_cost'] = number_format(
-                (float) $cData['template_cost_total'] + (float) $cData['billable_conversation_cost'],
+                (float) $cData['template_cost_total'] + (float) $cData['billable_conversation_cost'] + (float) $cData['call_cost_total'],
                 4,
                 '.',
                 ''
             );
             $cData['meta_total_estimated_cost'] = number_format(
-                (float) $cData['meta_template_cost_total'] + (float) $cData['meta_billable_conversation_cost'],
+                (float) $cData['meta_template_cost_total'] + (float) $cData['meta_billable_conversation_cost'] + (float) $cData['meta_call_cost_total'],
                 4,
                 '.',
                 ''
@@ -320,12 +386,13 @@ class TenantBillingService
         $freeTierRemaining = max(0, self::FREE_TIER_LIMIT - $conversationSessions);
         $billableConversations = max(0, $conversationSessions - self::FREE_TIER_LIMIT);
         $billableConversationCost = number_format($billableConversations * (float) $billableWindowRate, 4, '.', '');
-        $totalEstimatedCost = number_format((float) $templateCostTotal + (float) $billableConversationCost, 4, '.', '');
+        
+        $totalEstimatedCost = number_format((float) $templateCostTotal + (float) $billableConversationCost + $callCostTotal, 4, '.', '');
 
         // Meta (Facebook) actual expenses
         $metaBillableWindowRate = number_format(0.01, 4, '.', '');
         $metaBillableConversationCost = number_format($conversationSessions * 0.01, 4, '.', '');
-        $metaTotalEstimatedCost = number_format((float) $metaTemplateCostTotal + (float) $metaBillableConversationCost, 4, '.', '');
+        $metaTotalEstimatedCost = number_format((float) $metaTemplateCostTotal + (float) $metaBillableConversationCost + $metaCallCostTotal, 4, '.', '');
 
         return [
             'billing_month' => $month->copy()->startOfMonth()->toDateString(),
@@ -338,6 +405,7 @@ class TenantBillingService
             'billable_window_rate' => $billableWindowRate,
             'billable_conversation_cost' => $billableConversationCost,
             'template_cost_total' => $templateCostTotal,
+            'call_cost_total' => number_format($callCostTotal, 4, '.', ''),
             'total_estimated_cost' => $totalEstimatedCost,
             'is_approximate' => true,
             'template_breakdown' => $templateBreakdown,
@@ -346,8 +414,10 @@ class TenantBillingService
             'meta_billable_window_rate' => $metaBillableWindowRate,
             'meta_billable_conversation_cost' => $metaBillableConversationCost,
             'meta_template_cost_total' => $metaTemplateCostTotal,
+            'meta_call_cost_total' => number_format($metaCallCostTotal, 4, '.', ''),
             'meta_total_estimated_cost' => $metaTotalEstimatedCost,
             'meta_template_breakdown' => $metaTemplateBreakdown,
+            'calls_breakdown' => $callsBreakdown,
             'channels_breakdown' => array_values($channelMap),
             'channels_count' => count($channelMap),
             'payment_status' => 'unpaid',
@@ -378,8 +448,11 @@ class TenantBillingService
             'meta_billable_window_rate' => number_format((float) ($snapshot->meta_billable_window_rate ?? 0.0100), 4, '.', ''),
             'meta_billable_conversation_cost' => number_format((float) ($snapshot->meta_billable_conversation_cost ?? 0.0000), 4, '.', ''),
             'meta_template_cost_total' => number_format((float) ($snapshot->meta_template_cost_total ?? 0.0000), 4, '.', ''),
+            'call_cost_total' => number_format((float) ($snapshot->call_cost_total ?? 0.0000), 4, '.', ''),
+            'meta_call_cost_total' => number_format((float) ($snapshot->meta_call_cost_total ?? 0.0000), 4, '.', ''),
             'meta_total_estimated_cost' => number_format((float) ($snapshot->meta_total_estimated_cost ?? 0.0000), 4, '.', ''),
             'meta_template_breakdown' => $snapshot->meta_template_breakdown ?? [],
+            'calls_breakdown' => $snapshot->calls_breakdown ?? [],
             'channels_breakdown' => $snapshot->channels_breakdown ?? [],
             'channels_count' => is_array($snapshot->channels_breakdown) ? count($snapshot->channels_breakdown) : 0,
             'payment_status' => $snapshot->payment_status ?? 'unpaid',

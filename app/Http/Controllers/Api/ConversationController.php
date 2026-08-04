@@ -346,17 +346,17 @@ class ConversationController extends Controller
                 if ($mediaMimeType === 'audio/mp4' && $extension === 'mp4') {
                     $extension = 'm4a';
                 }
-                $storedPath = $file->storeAs('media', uniqid() . '.' . $extension, 'public');
+                $storedPath = $file->storeAs('conversations/' . $conversation->id, uniqid() . '.' . $extension, 'public');
                 $mediaPath = 'storage/' . $storedPath;
                 
                 // Absolute path to upload to Meta
-                $absolutePath = storage_path('app/public/' . $storedPath);
+                $absolutePath = \Illuminate\Support\Facades\Storage::disk('public')->path($storedPath);
 
                 if (!$isInternal) {
                     // Transcode recorded/voice-note audio to OGG/Opus so WhatsApp displays it natively as a playable voice note waveform
                     if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg']))) {
-                        $transcodedPath = 'media/' . uniqid() . '.ogg';
-                        $absoluteTranscodedPath = storage_path('app/public/' . $transcodedPath);
+                        $transcodedPath = 'conversations/' . $conversation->id . '/' . uniqid() . '.ogg';
+                        $absoluteTranscodedPath = \Illuminate\Support\Facades\Storage::disk('public')->path($transcodedPath);
 
                         $result = \Illuminate\Support\Facades\Process::run([
                             'ffmpeg', '-y', '-i', $absolutePath,

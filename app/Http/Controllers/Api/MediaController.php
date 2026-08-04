@@ -53,7 +53,7 @@ class MediaController extends Controller
         // If it's a local storage URL, stream the local file directly
         if (!str_starts_with($message->media_url, 'http://') && !str_starts_with($message->media_url, 'https://')) {
             $relativePath = str_replace(['public/', 'storage/'], '', $message->media_url);
-            $path = storage_path('app/public/' . $relativePath);
+            $path = \Illuminate\Support\Facades\Storage::disk('public')->path($relativePath);
 
             if (!file_exists($path)) {
                 $path = storage_path('app/' . $relativePath); // fallback to private storage
@@ -119,6 +119,42 @@ class MediaController extends Controller
             }
             
             $contentType = $message->media_mime_type ?: $response->header('Content-Type') ?: 'application/octet-stream';
+            
+            // Cache downloaded media locally inside conversation folder and update database record
+            try {
+                $mediaId = $message->media_filename ?: uniqid();
+                
+                $extension = 'bin';
+                if ($contentType) {
+                    $mimeParts = explode('/', $contentType);
+                    if (count($mimeParts) === 2) {
+                        $extension = $mimeParts[1];
+                        if (str_contains($extension, ';')) {
+                            $extension = explode(';', $extension)[0];
+                        }
+                    }
+                }
+                
+                if ($extension === 'jpeg') {
+                    $extension = 'jpg';
+                }
+                if ($contentType === 'audio/ogg' || $contentType === 'audio/ogg; codecs=opus') {
+                    $extension = 'ogg';
+                }
+
+                $fileName = $mediaId . '.' . $extension;
+                $storedFolder = 'conversations/' . $conversation->id;
+                $relativePath = $storedFolder . '/' . $fileName;
+
+                \Illuminate\Support\Facades\Storage::disk('public')->put($relativePath, $response->body());
+
+                // Update the message so next time it is loaded directly from local storage
+                $message->update([
+                    'media_url' => 'storage/' . $relativePath
+                ]);
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning("MediaController: Failed to cache proxy media locally for message: " . $message->id . ", error: " . $e->getMessage());
+            }
             
             return response($response->body(), 200)
                 ->header('Content-Type', $contentType)

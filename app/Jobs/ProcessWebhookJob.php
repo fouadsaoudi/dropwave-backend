@@ -245,6 +245,65 @@ class ProcessWebhookJob implements ShouldQueue
                     $mediaUrl = $mediaObj['url'] ?? null;
                     $mediaMimeType = $mediaObj['mime_type'] ?? null;
                     $mediaFilename = $mediaObj['filename'] ?? $mediaObj['id'] ?? null;
+                    $mediaId = $mediaObj['id'] ?? null;
+
+                    if ($mediaId && $channel->decrypted_token) {
+                        try {
+                            $apiVersion = config('services.meta.api_version', 'v20.0');
+                            $metaUrl = "https://graph.facebook.com/{$apiVersion}/{$mediaId}";
+
+                            $metaResponse = Http::withHeaders([
+                                'Authorization' => 'Bearer ' . $channel->decrypted_token
+                            ])->get($metaUrl);
+
+                            if ($metaResponse->successful()) {
+                                $downloadUrl = $metaResponse->json('url');
+                                if ($downloadUrl) {
+                                    $downloadResponse = Http::withHeaders([
+                                        'Authorization' => 'Bearer ' . $channel->decrypted_token
+                                    ])->get($downloadUrl);
+
+                                    if ($downloadResponse->successful()) {
+                                        $extension = 'bin';
+                                        if ($mediaMimeType) {
+                                            $mimeParts = explode('/', $mediaMimeType);
+                                            if (count($mimeParts) === 2) {
+                                                $extension = $mimeParts[1];
+                                                if (str_contains($extension, ';')) {
+                                                    $extension = explode(';', $extension)[0];
+                                                }
+                                            }
+                                        }
+
+                                        if ($extension === 'jpeg') {
+                                            $extension = 'jpg';
+                                        }
+                                        if ($mediaMimeType === 'audio/ogg' || $mediaMimeType === 'audio/ogg; codecs=opus') {
+                                            $extension = 'ogg';
+                                        }
+
+                                        $fileName = $mediaId . '.' . $extension;
+                                        $storedFolder = 'conversations/' . $conversation->id;
+                                        $relativePath = $storedFolder . '/' . $fileName;
+
+                                        \Illuminate\Support\Facades\Storage::disk('public')->put($relativePath, $downloadResponse->body());
+
+                                        $mediaUrl = 'storage/' . $relativePath;
+                                    } else {
+                                        Log::warning("ProcessWebhookJob: Failed to download media content from Meta for ID: " . $mediaId, [
+                                            'status' => $downloadResponse->status()
+                                        ]);
+                                    }
+                                }
+                            } else {
+                                Log::warning("ProcessWebhookJob: Failed to get media download URL from Meta for ID: " . $mediaId, [
+                                    'status' => $metaResponse->status()
+                                ]);
+                            }
+                        } catch (Exception $e) {
+                            Log::warning("ProcessWebhookJob: Exception during media download: " . $e->getMessage());
+                        }
+                    }
                 }
             }
 

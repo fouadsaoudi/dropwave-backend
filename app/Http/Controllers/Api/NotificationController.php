@@ -13,7 +13,21 @@ class NotificationController extends Controller
      */
     public function index(Request $request)
     {
-        $notifications = Notification::orderBy('created_at', 'desc')->get();
+        $user = $request->user();
+        $query = Notification::orderBy('created_at', 'desc');
+
+        if ($user->isAgent()) {
+            $query->whereIn('conversation_id', function ($subQuery) use ($user) {
+                $subQuery->select('id')
+                    ->from('conversations')
+                    ->where(function ($q) use ($user) {
+                        $q->where('assigned_to', $user->id)
+                          ->orWhereNull('assigned_to');
+                    });
+            });
+        }
+
+        $notifications = $query->get();
 
         return response()->json($notifications);
     }

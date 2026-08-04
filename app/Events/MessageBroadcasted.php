@@ -61,6 +61,7 @@ class MessageBroadcasted implements ShouldBroadcastNow
 
         $messageData['contact_name'] = $contact?->name;
         $messageData['contact_phone'] = $contact?->phone_number;
+        $messageData['conversation_assigned_to'] = $conversation?->assigned_to;
 
         return [
             'message' => $messageData,

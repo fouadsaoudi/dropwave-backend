@@ -26,6 +26,7 @@ class Message extends Model
         'reaction_emoji',
         'reaction_to_msg_id',
         'whatsapp_msg_id',
+        'is_internal',
         'status',
         'error_code',
         'error_message',
@@ -40,6 +41,7 @@ class Message extends Model
     protected $casts = [
         'latitude' => 'decimal:8',
         'longitude' => 'decimal:8',
+        'is_internal' => 'boolean',
         'sent_at' => 'datetime',
         'delivered_at' => 'datetime',
         'read_at' => 'datetime',

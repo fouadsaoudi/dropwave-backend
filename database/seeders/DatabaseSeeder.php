@@ -52,6 +52,16 @@ class DatabaseSeeder extends Seeder
             'is_active' => true,
         ]);
 
+        // Create Manager under Click & Pick
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name' => 'Click & Pick Manager',
+            'email' => 'manager@clickandpick.com',
+            'password' => Hash::make('password'),
+            'role_id' => $managerRole->id,
+            'is_active' => true,
+        ]);
+
         // 5. Create a Mock WabaChannel for Click & Pick
         $channel = WabaChannel::create([
             'tenant_id' => $tenant->id,

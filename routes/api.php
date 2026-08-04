@@ -41,6 +41,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/conversations/counts', [ConversationController::class, 'counts']);
     Route::get('/conversations/{id}/messages', [ConversationController::class, 'messages']);
     Route::post('/conversations/{id}/claim', [ConversationController::class, 'claim']);
+    Route::post('/conversations/{id}/assign', [ConversationController::class, 'assign']);
     Route::post('/conversations/{id}/resolve', [ConversationController::class, 'resolve']);
     Route::post('/conversations/{id}/reopen', [ConversationController::class, 'reopen']);
     Route::post('/conversations/{id}/messages', [ConversationController::class, 'sendMessage']);

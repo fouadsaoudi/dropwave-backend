@@ -165,7 +165,10 @@ class AdminUserManagementTest extends TestCase
             ->deleteJson("/api/admin/users/{$targetUser->id}");
 
         $response->assertStatus(200);
-        $this->assertDatabaseMissing('users', ['id' => $targetUser->id]);
+        $this->assertDatabaseHas('users', [
+            'id' => $targetUser->id,
+            'is_active' => false,
+        ]);
     }
 
     public function test_admin_cannot_delete_self()
@@ -174,7 +177,7 @@ class AdminUserManagementTest extends TestCase
             ->deleteJson("/api/admin/users/{$this->adminUser->id}");
 
         $response->assertStatus(400)
-            ->assertJsonFragment(['message' => 'Deletions denied: you cannot remove your active admin session profile.']);
+            ->assertJsonFragment(['message' => 'Deletions denied: you cannot deactivate your active session profile.']);
 
         $this->assertDatabaseHas('users', ['id' => $this->adminUser->id]);
     }

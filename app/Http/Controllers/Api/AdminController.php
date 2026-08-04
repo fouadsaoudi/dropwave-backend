@@ -31,6 +31,16 @@ class AdminController extends Controller
         return null;
     }
 
+    private function requireAdminOrManager(Request $request): ?\Illuminate\Http\JsonResponse
+    {
+        $user = $request->user();
+        if (!$user || (!$user->isAdmin() && !$user->isManager())) {
+            return response()->json(['error' => 'forbidden', 'message' => 'Unauthorized access.'], 403);
+        }
+
+        return null;
+    }
+
     /**
      * Get admin platform overview metrics (Admin only).
      */
@@ -371,30 +381,43 @@ class AdminController extends Controller
     }
 
     /**
-     * List all system users with their roles and tenants (Admin only).
+     * List all system users with their roles and tenants (Admin or Manager).
      */
     public function listUsers()
     {
-        if ($response = $this->requireAdmin(request())) {
+        $request = request();
+        if ($response = $this->requireAdminOrManager($request)) {
             return $response;
         }
 
-        $users = User::with(['tenant', 'role'])
-            ->get(['id', 'tenant_id', 'role_id', 'name', 'email', 'is_active', 'created_at']);
+        $user = $request->user();
+        $query = User::with(['tenant', 'role']);
+
+        if ($user->isManager()) {
+            $query->where('tenant_id', $user->tenant_id);
+        }
+
+        $users = $query->get(['id', 'tenant_id', 'role_id', 'name', 'email', 'is_active', 'created_at']);
 
         return response()->json($users);
     }
 
     /**
-     * List all system roles (Admin only).
+     * List all system roles (Admin or Manager).
      */
     public function listRoles()
     {
-        if ($response = $this->requireAdmin(request())) {
+        $request = request();
+        if ($response = $this->requireAdminOrManager($request)) {
             return $response;
         }
 
-        return response()->json(Role::get(['id', 'name']));
+        $query = Role::query();
+        if ($request->user()->isManager()) {
+            $query->where('name', '!=', 'admin');
+        }
+
+        return response()->json($query->get(['id', 'name']));
     }
 
     /**
@@ -470,24 +493,33 @@ class AdminController extends Controller
     }
 
     /**
-     * Store/Create a new user under a tenant (Admin only).
+     * Store/Create a new user under a tenant (Admin or Manager).
      */
     public function storeUser(Request $request)
     {
-        if ($response = $this->requireAdmin($request)) {
+        if ($response = $this->requireAdminOrManager($request)) {
             return $response;
         }
 
+        $caller = $request->user();
+
         $request->validate([
-            'tenant_id' => 'nullable|exists:tenants,id',
+            'tenant_id' => $caller->isManager() ? 'nullable' : 'nullable|exists:tenants,id',
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email|max:255',
             'password' => 'required|string|min:6',
             'role_id' => 'required|exists:roles,id',
         ]);
 
+        $role = Role::find($request->role_id);
+        if ($caller->isManager() && $role && $role->name === 'admin') {
+            return response()->json(['error' => 'validation', 'message' => 'Managers cannot assign the admin role.'], 422);
+        }
+
+        $tenantId = $caller->isManager() ? $caller->tenant_id : $request->tenant_id;
+
         $user = User::create([
-            'tenant_id' => $request->tenant_id,
+            'tenant_id' => $tenantId,
             'name' => $request->name,
             'email' => $request->email,
             'password' => bcrypt($request->password),
@@ -502,35 +534,48 @@ class AdminController extends Controller
     }
 
     /**
-     * Update an existing user's details (Admin only).
+     * Update an existing user's details (Admin or Manager).
      */
     public function updateUser(Request $request, $id)
     {
-        if ($response = $this->requireAdmin($request)) {
+        if ($response = $this->requireAdminOrManager($request)) {
             return $response;
         }
 
-        $user = User::find($id);
+        $caller = $request->user();
+
+        $query = User::query();
+        if ($caller->isManager()) {
+            $query->where('tenant_id', $caller->tenant_id);
+        }
+
+        $user = $query->find($id);
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
         }
 
         $request->validate([
-            'tenant_id' => 'nullable|exists:tenants,id',
+            'tenant_id' => $caller->isManager() ? 'nullable' : 'nullable|exists:tenants,id',
             'name' => 'sometimes|required|string|max:255',
             'role_id' => 'sometimes|required|exists:roles,id',
             'is_active' => 'sometimes|required|boolean',
             'password' => 'nullable|string|min:6',
         ]);
 
-        if ($request->has('tenant_id') || $request->exists('tenant_id')) {
+        if ($request->has('role_id')) {
+            $role = Role::find($request->role_id);
+            if ($caller->isManager() && $role && $role->name === 'admin') {
+                return response()->json(['error' => 'validation', 'message' => 'Managers cannot assign the admin role.'], 422);
+            }
+            $user->role_id = $request->role_id;
+        }
+
+        if (!$caller->isManager() && ($request->has('tenant_id') || $request->exists('tenant_id'))) {
             $user->tenant_id = $request->tenant_id;
         }
+
         if ($request->has('name')) {
             $user->name = $request->name;
-        }
-        if ($request->has('role_id')) {
-            $user->role_id = $request->role_id;
         }
         if ($request->has('is_active')) {
             $user->is_active = $request->is_active;
@@ -548,28 +593,37 @@ class AdminController extends Controller
     }
 
     /**
-     * Delete/Remove a user profile (Admin only).
+     * Deactivate/Disable a user profile instead of deleting it (Admin or Manager).
      */
     public function deleteUser($id)
     {
-        if ($response = $this->requireAdmin(request())) {
+        $request = request();
+        if ($response = $this->requireAdminOrManager($request)) {
             return $response;
         }
 
-        if (auth()->id() == $id) {
+        $caller = $request->user();
+
+        if ($caller->id == $id) {
             return response()->json([
-                'message' => 'Deletions denied: you cannot remove your active admin session profile.'
+                'message' => 'Deletions denied: you cannot deactivate your active session profile.'
             ], 400);
         }
 
-        $user = User::find($id);
+        $query = User::query();
+        if ($caller->isManager()) {
+            $query->where('tenant_id', $caller->tenant_id);
+        }
+
+        $user = $query->find($id);
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
         }
 
-        $user->delete();
+        $user->is_active = false;
+        $user->save();
 
-        return response()->json(['message' => 'User account deleted successfully.']);
+        return response()->json(['message' => 'User account deactivated successfully.']);
     }
 
     /**

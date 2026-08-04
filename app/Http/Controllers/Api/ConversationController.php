@@ -40,19 +40,33 @@ class ConversationController extends Controller
             $query->whereIn('status', ['open']);
         }
 
-        // Filter by assigned agent
-        if ($request->has('assigned_to')) {
-            $query->where('assigned_to', $request->assigned_to);
-        }
+        $user = $request->user();
+        if ($user->isAgent()) {
+            $query->where(function ($q) use ($user) {
+                $q->where('assigned_to', $user->id)
+                  ->orWhereNull('assigned_to');
+            });
 
-        // Filter by unassigned (unclaimed) chats
-        if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
-            $query->whereNull('assigned_to');
-        }
+            if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
+                $query->whereNull('assigned_to');
+            } elseif ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
+                $query->where('assigned_to', $user->id);
+            }
+        } else {
+            // Filter by assigned agent
+            if ($request->has('assigned_to')) {
+                $query->where('assigned_to', $request->assigned_to);
+            }
 
-        // Filter by assigned chats
-        if ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
-            $query->whereNotNull('assigned_to');
+            // Filter by unassigned (unclaimed) chats
+            if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
+                $query->whereNull('assigned_to');
+            }
+
+            // Filter by assigned chats
+            if ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
+                $query->whereNotNull('assigned_to');
+            }
         }
 
         $conversations = $query->orderBy('last_message_at', 'desc')->get();
@@ -65,14 +79,22 @@ class ConversationController extends Controller
      */
     public function counts(Request $request)
     {
-        $active = Conversation::where('status', 'open')->whereNotNull('assigned_to')->count();
-        $unassigned = Conversation::where('status', 'open')->whereNull('assigned_to')->count();
-        $resolved = Conversation::where('status', 'resolved')->count();
+        $user = $request->user();
+
+        $activeQuery = Conversation::where('status', 'open')->whereNotNull('assigned_to');
+        $unassignedQuery = Conversation::where('status', 'open')->whereNull('assigned_to');
+        $resolvedQuery = Conversation::where('status', 'resolved');
+
+        if ($user->isAgent()) {
+            $activeQuery->where('assigned_to', $user->id);
+            $unassignedQuery->whereNull('assigned_to');
+            $resolvedQuery->where('assigned_to', $user->id);
+        }
 
         return response()->json([
-            'active' => $active,
-            'unassigned' => $unassigned,
-            'resolved' => $resolved
+            'active' => $activeQuery->count(),
+            'unassigned' => $unassignedQuery->count(),
+            'resolved' => $resolvedQuery->count()
         ]);
     }
 
@@ -90,7 +112,15 @@ class ConversationController extends Controller
             ], 404);
         }
 
-        $query = Message::where('conversation_id', $id);
+        $user = $request->user();
+        if ($user->isAgent() && $conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Unauthorized access to this conversation.'
+            ], 403);
+        }
+
+        $query = Message::with('sender')->where('conversation_id', $id);
 
         if ($request->has('before_id')) {
             $query->where('id', '<', $request->before_id);
@@ -131,6 +161,14 @@ class ConversationController extends Controller
             ], 404);
         }
 
+        $user = $request->user();
+        if ($user->isAgent() && $conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Unauthorized access to this conversation.'
+            ], 403);
+        }
+
         $conversation->update([
             'assigned_to' => Auth::id(),
             'assigned_at' => now(),
@@ -158,6 +196,14 @@ class ConversationController extends Controller
                 'error' => 'not_found',
                 'message' => 'Conversation not found.'
             ], 404);
+        }
+
+        $user = $request->user();
+        if ($user->isAgent() && $conversation->assigned_to !== $user->id) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Unauthorized access to this conversation.'
+            ], 403);
         }
 
         $conversation->update([
@@ -189,6 +235,14 @@ class ConversationController extends Controller
             ], 404);
         }
 
+        $user = $request->user();
+        if ($user->isAgent() && $conversation->assigned_to !== $user->id) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Unauthorized access to this conversation.'
+            ], 403);
+        }
+
         $conversation->update([
             'status' => 'open',
             'resolved_by' => null,
@@ -218,8 +272,35 @@ class ConversationController extends Controller
             ], 404);
         }
 
-        // 1. Enforce WhatsApp 24-hour service policy window
-        if ($conversation->isWindowClosed()) {
+        $user = $request->user();
+        $isInternal = filter_var($request->input('is_internal'), FILTER_VALIDATE_BOOLEAN);
+
+        // Check permissions
+        $isManagerOrAdmin = $user->isManager() || $user->isAdmin();
+        if (!$isManagerOrAdmin) {
+            if ($user->isAgent()) {
+                if (!$isInternal) {
+                    // External message: agents must own the conversation
+                    if ($conversation->assigned_to !== $user->id) {
+                        return response()->json([
+                            'error' => 'forbidden',
+                            'message' => 'You must claim this conversation before sending a message.'
+                        ], 403);
+                    }
+                } else {
+                    // Internal note: agents must own the conversation (or it must be unassigned)
+                    if ($conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
+                        return response()->json([
+                            'error' => 'forbidden',
+                            'message' => 'Unauthorized to add internal notes to another agent\'s conversation.'
+                        ], 403);
+                    }
+                }
+            }
+        }
+
+        // 1. Enforce WhatsApp 24-hour service policy window (Only for external messages)
+        if (!$isInternal && $conversation->isWindowClosed()) {
             return response()->json([
                 'error' => 'policy_violation',
                 'message' => 'The WhatsApp 24-hour customer service window has expired. You can only send pre-approved template messages to this contact.'
@@ -271,108 +352,106 @@ class ConversationController extends Controller
                 // Absolute path to upload to Meta
                 $absolutePath = storage_path('app/public/' . $storedPath);
 
-                // Transcode recorded/voice-note audio to OGG/Opus so WhatsApp displays it natively as a playable voice note waveform
-                if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg']))) {
-                    $transcodedPath = 'media/' . uniqid() . '.ogg';
-                    $absoluteTranscodedPath = storage_path('app/public/' . $transcodedPath);
+                if (!$isInternal) {
+                    // Transcode recorded/voice-note audio to OGG/Opus so WhatsApp displays it natively as a playable voice note waveform
+                    if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg']))) {
+                        $transcodedPath = 'media/' . uniqid() . '.ogg';
+                        $absoluteTranscodedPath = storage_path('app/public/' . $transcodedPath);
 
-                    // Convert to a WhatsApp-compatible OGG/Opus voice note. Browser recordings
-                    // can carry a tiny negative initial timestamp; WhatsApp renders the voice
-                    // bubble but may fail to open the media unless the output starts at zero.
-                    $result = \Illuminate\Support\Facades\Process::run([
-                        'ffmpeg', '-y', '-i', $absolutePath,
-                        '-map', '0:a:0',
-                        '-vn',
-                        '-af', 'aresample=async=1:first_pts=0',
-                        '-c:a', 'libopus',
-                        '-b:a', '64k',
-                        '-ac', '1',
-                        '-application', 'voip',
-                        '-f', 'ogg',
-                        $absoluteTranscodedPath
-                    ]);
-
-                    if ($result->successful() && file_exists($absoluteTranscodedPath)) {
-                        @unlink($absolutePath); // Delete the original file
-                        
-                        $storedPath = $transcodedPath;
-                        $mediaPath = 'storage/' . $storedPath;
-                        $absolutePath = $absoluteTranscodedPath;
-                        // WhatsApp accepts OGG only when its stream is Opus. The Opus codec is
-                        // determined from the transcoded file itself; the upload MIME must stay
-                        // the base type (audio/ogg), not include a codecs parameter.
-                        $mediaMimeType = 'audio/ogg';
-                        $metaUploadMimeType = 'audio/ogg';
-                        $mediaFilename = 'voice_record.ogg';
-                    } else {
-                        Log::error("FFmpeg transcoding failed", [
-                            'exit_code' => $result->exitCode(),
-                            'output' => $result->output(),
-                            'error' => $result->errorOutput()
+                        $result = \Illuminate\Support\Facades\Process::run([
+                            'ffmpeg', '-y', '-i', $absolutePath,
+                            '-map', '0:a:0',
+                            '-vn',
+                            '-af', 'aresample=async=1:first_pts=0',
+                            '-c:a', 'libopus',
+                            '-b:a', '64k',
+                            '-ac', '1',
+                            '-application', 'voip',
+                            '-f', 'ogg',
+                            $absoluteTranscodedPath
                         ]);
+
+                        if ($result->successful() && file_exists($absoluteTranscodedPath)) {
+                            @unlink($absolutePath); // Delete the original file
+                            
+                            $storedPath = $transcodedPath;
+                            $mediaPath = 'storage/' . $storedPath;
+                            $absolutePath = $absoluteTranscodedPath;
+                            $mediaMimeType = 'audio/ogg';
+                            $metaUploadMimeType = 'audio/ogg';
+                            $mediaFilename = 'voice_record.ogg';
+                        } else {
+                            Log::error("FFmpeg transcoding failed", [
+                                'exit_code' => $result->exitCode(),
+                                'output' => $result->output(),
+                                'error' => $result->errorOutput()
+                            ]);
+                        }
                     }
-                }
-                
-                // 2.a. Upload media to Meta
-                $uploadResponse = $this->metaService->uploadMedia(
-                    $channel->decrypted_token,
-                    $channel->phone_number_id,
-                    $absolutePath,
-                    $metaUploadMimeType
-                );
+                    
+                    // 2.a. Upload media to Meta
+                    $uploadResponse = $this->metaService->uploadMedia(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $absolutePath,
+                        $metaUploadMimeType
+                    );
 
-                $metaMediaId = $uploadResponse['id'] ?? null;
-                if (!$metaMediaId) {
-                    throw new \Exception('Meta upload did not return a valid media ID');
+                    $metaMediaId = $uploadResponse['id'] ?? null;
+                    if (!$metaMediaId) {
+                        throw new \Exception('Meta upload did not return a valid media ID');
+                    }
+                    
+                    // 2.b. Dispatch media message using Meta WhatsApp Business API based on type
+                    if ($msgType === 'image') {
+                        $metaResponse = $this->metaService->sendImageMessage(
+                            $channel->decrypted_token,
+                            $channel->phone_number_id,
+                            $contact->phone_number,
+                            $metaMediaId,
+                            $request->body // caption
+                        );
+                    } elseif ($msgType === 'video') {
+                        $metaResponse = $this->metaService->sendVideoMessage(
+                            $channel->decrypted_token,
+                            $channel->phone_number_id,
+                            $contact->phone_number,
+                            $metaMediaId,
+                            $request->body // caption
+                        );
+                    } elseif ($msgType === 'audio') {
+                        $metaResponse = $this->metaService->sendAudioMessage(
+                            $channel->decrypted_token,
+                            $channel->phone_number_id,
+                            $contact->phone_number,
+                            $metaMediaId,
+                            $isVoiceMessage
+                        );
+                    } else {
+                        $metaResponse = $this->metaService->sendDocumentMessage(
+                            $channel->decrypted_token,
+                            $channel->phone_number_id,
+                            $contact->phone_number,
+                            $metaMediaId,
+                            $mediaFilename,
+                            $request->body // caption
+                        );
+                    }
+                    
+                    $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
                 }
-                
-                // 2.b. Dispatch media message using Meta WhatsApp Business API based on type
-                if ($msgType === 'image') {
-                    $metaResponse = $this->metaService->sendImageMessage(
-                        $channel->decrypted_token,
-                        $channel->phone_number_id,
-                        $contact->phone_number,
-                        $metaMediaId,
-                        $request->body // caption
-                    );
-                } elseif ($msgType === 'video') {
-                    $metaResponse = $this->metaService->sendVideoMessage(
-                        $channel->decrypted_token,
-                        $channel->phone_number_id,
-                        $contact->phone_number,
-                        $metaMediaId,
-                        $request->body // caption
-                    );
-                } elseif ($msgType === 'audio') {
-                    $metaResponse = $this->metaService->sendAudioMessage(
-                        $channel->decrypted_token,
-                        $channel->phone_number_id,
-                        $contact->phone_number,
-                        $metaMediaId,
-                        $isVoiceMessage
-                    );
-                } else {
-                    $metaResponse = $this->metaService->sendDocumentMessage(
-                        $channel->decrypted_token,
-                        $channel->phone_number_id,
-                        $contact->phone_number,
-                        $metaMediaId,
-                        $mediaFilename,
-                        $request->body // caption
-                    );
-                }
-                
-                $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
             } else {
-                // 2. Dispatch standard text message using Meta WhatsApp Business API
-                $metaResponse = $this->metaService->sendTextMessage(
-                    $channel->decrypted_token,
-                    $channel->phone_number_id,
-                    $contact->phone_number,
-                    $request->body
-                );
+                if (!$isInternal) {
+                    // 2. Dispatch standard text message using Meta WhatsApp Business API
+                    $metaResponse = $this->metaService->sendTextMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $contact->phone_number,
+                        $request->body
+                    );
 
-                $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+                    $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+                }
             }
 
             // 3. Save message record to database
@@ -386,6 +465,7 @@ class ConversationController extends Controller
                 'media_mime_type' => $mediaMimeType,
                 'media_filename' => $mediaFilename,
                 'whatsapp_msg_id' => $whatsappMsgId,
+                'is_internal' => $isInternal,
                 'status' => 'sent',
                 'sent_by' => Auth::id(),
                 'sent_at' => now(),
@@ -400,10 +480,17 @@ class ConversationController extends Controller
                 default => $request->body,
             };
 
+            if ($isInternal) {
+                $lastSnippet = '📝 Note: ' . $lastSnippet;
+            }
+
             $conversation->update([
                 'last_message_body' => $lastSnippet,
                 'last_message_at' => now(),
             ]);
+
+            // Load sender relationship to broadcast it
+            $message->load('sender');
 
             // 5. Broadcast message & conversation updates
             broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
@@ -421,6 +508,76 @@ class ConversationController extends Controller
                 'message' => $e->getMessage()
             ], 422);
         }
+    }
+
+    /**
+     * Assign a conversation to a specific user (Manager/Admin only).
+     */
+    public function assign(Request $request, $id)
+    {
+        $conversation = Conversation::find($id);
+
+        if (!$conversation) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Conversation not found.'
+            ], 404);
+        }
+
+        $user = $request->user();
+        if (!$user->isManager() && !$user->isAdmin()) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Only managers and admins can reassign conversations.'
+            ], 403);
+        }
+
+        $request->validate([
+            'assigned_to' => 'nullable|exists:users,id'
+        ]);
+
+        $assignedTo = $request->input('assigned_to');
+        
+        // If assigned_to is provided, ensure they belong to the same tenant
+        if ($assignedTo) {
+            $targetUser = \App\Models\User::find($assignedTo);
+            if ($targetUser->tenant_id !== $user->tenant_id) {
+                return response()->json([
+                    'error' => 'forbidden',
+                    'message' => 'Cannot assign conversation to a user from another tenant.'
+                ], 403);
+            }
+        }
+
+        $conversation->update([
+            'assigned_to' => $assignedTo,
+            'assigned_at' => $assignedTo ? now() : null,
+        ]);
+
+        $conversation->load(['contact', 'channel', 'assignee']);
+        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+
+        // Create a system log message as an internal note
+        $assigneeName = $conversation->assignee ? $conversation->assignee->name : 'Unassigned';
+        $message = Message::create([
+            'tenant_id' => $conversation->tenant_id,
+            'conversation_id' => $conversation->id,
+            'direction' => 'outbound',
+            'type' => 'text',
+            'body' => "Conversation reassigned to {$assigneeName} by {$user->name}.",
+            'is_internal' => true,
+            'status' => 'sent',
+            'sent_by' => $user->id,
+            'sent_at' => now(),
+        ]);
+
+        $message->load('sender');
+        broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
+
+        return response()->json([
+            'message' => 'Conversation assigned successfully.',
+            'conversation' => $conversation
+        ]);
     }
 
     /**

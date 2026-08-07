@@ -15,6 +15,8 @@ return [
 
     'default' => env('FILESYSTEM_DISK', 'local'),
 
+    'media_disk' => env('USE_S3_STORAGE', false) ? 's3' : 'public',
+
     /*
     |--------------------------------------------------------------------------
     | Filesystem Disks

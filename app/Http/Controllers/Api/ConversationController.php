@@ -341,22 +341,25 @@ class ConversationController extends Controller
                     ? 'text/plain'
                     : $mediaMimeType;
                 
-                // Store local copy on server with correct file extension
+                $disk = config('filesystems.media_disk', 'public');
+                
+                // Store local copy on server temporarily for transcoding and/or uploading
                 $extension = $file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'bin';
                 if ($mediaMimeType === 'audio/mp4' && $extension === 'mp4') {
                     $extension = 'm4a';
                 }
-                $storedPath = $file->storeAs('conversations/' . $conversation->id, uniqid() . '.' . $extension, 'public');
-                $mediaPath = 'storage/' . $storedPath;
                 
-                // Absolute path to upload to Meta
-                $absolutePath = \Illuminate\Support\Facades\Storage::disk('public')->path($storedPath);
+                $tempFilename = uniqid() . '.' . $extension;
+                $tempRelativePath = 'temp/' . $tempFilename;
+                $storedTempPath = $file->storeAs('temp', $tempFilename, 'public');
+                $absolutePath = \Illuminate\Support\Facades\Storage::disk('public')->path($storedTempPath);
 
                 if (!$isInternal) {
                     // Transcode recorded/voice-note audio to OGG/Opus so WhatsApp displays it natively as a playable voice note waveform
                     if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg']))) {
-                        $transcodedPath = 'conversations/' . $conversation->id . '/' . uniqid() . '.ogg';
-                        $absoluteTranscodedPath = \Illuminate\Support\Facades\Storage::disk('public')->path($transcodedPath);
+                        $tempTranscodedFilename = uniqid() . '.ogg';
+                        $tempTranscodedRelativePath = 'temp/' . $tempTranscodedFilename;
+                        $absoluteTranscodedPath = \Illuminate\Support\Facades\Storage::disk('public')->path($tempTranscodedRelativePath);
 
                         $result = \Illuminate\Support\Facades\Process::run([
                             'ffmpeg', '-y', '-i', $absolutePath,
@@ -372,14 +375,14 @@ class ConversationController extends Controller
                         ]);
 
                         if ($result->successful() && file_exists($absoluteTranscodedPath)) {
-                            @unlink($absolutePath); // Delete the original file
+                            @unlink($absolutePath); // Delete the original temp file
                             
-                            $storedPath = $transcodedPath;
-                            $mediaPath = 'storage/' . $storedPath;
+                            $storedTempPath = $tempTranscodedRelativePath;
                             $absolutePath = $absoluteTranscodedPath;
                             $mediaMimeType = 'audio/ogg';
                             $metaUploadMimeType = 'audio/ogg';
                             $mediaFilename = 'voice_record.ogg';
+                            $extension = 'ogg';
                         } else {
                             Log::error("FFmpeg transcoding failed", [
                                 'exit_code' => $result->exitCode(),
@@ -388,7 +391,19 @@ class ConversationController extends Controller
                             ]);
                         }
                     }
-                    
+                }
+
+                // Upload the final file to the target storage disk (public or S3)
+                $finalFilename = uniqid() . '.' . $extension;
+                if ($mediaFilename === 'voice_record.ogg') {
+                    $finalFilename = 'voice_record_' . uniqid() . '.ogg';
+                }
+                $storedPath = 'conversations/' . $conversation->id . '/' . $finalFilename;
+                
+                \Illuminate\Support\Facades\Storage::disk($disk)->put($storedPath, file_get_contents($absolutePath));
+                $mediaPath = 'storage/' . $storedPath;
+
+                if (!$isInternal) {
                     // 2.a. Upload media to Meta
                     $uploadResponse = $this->metaService->uploadMedia(
                         $channel->decrypted_token,
@@ -439,6 +454,11 @@ class ConversationController extends Controller
                     }
                     
                     $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+                }
+
+                // Clean up the local temp file after uploading to target disk and sending to Meta
+                if (isset($absolutePath) && file_exists($absolutePath)) {
+                    @unlink($absolutePath);
                 }
             } else {
                 if (!$isInternal) {

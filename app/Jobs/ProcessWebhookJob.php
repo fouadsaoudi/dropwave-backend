@@ -249,6 +249,7 @@ class ProcessWebhookJob implements ShouldQueue
 
                     if ($mediaId && $channel->decrypted_token) {
                         try {
+                            $disk = config('filesystems.media_disk', 'public');
                             $apiVersion = config('services.meta.api_version', 'v20.0');
                             $metaUrl = "https://graph.facebook.com/{$apiVersion}/{$mediaId}";
 
@@ -286,7 +287,7 @@ class ProcessWebhookJob implements ShouldQueue
                                         $storedFolder = 'conversations/' . $conversation->id;
                                         $relativePath = $storedFolder . '/' . $fileName;
 
-                                        \Illuminate\Support\Facades\Storage::disk('public')->put($relativePath, $downloadResponse->body());
+                                        \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $downloadResponse->body());
 
                                         $mediaUrl = 'storage/' . $relativePath;
                                     } else {

@@ -50,21 +50,37 @@ class MediaController extends Controller
             abort(404, 'Message has no media attachment');
         }
 
-        // If it's a local storage URL, stream the local file directly
+        $disk = config('filesystems.media_disk', 'public');
+
+        // If it's a local/S3 storage URL, stream the file directly
         if (!str_starts_with($message->media_url, 'http://') && !str_starts_with($message->media_url, 'https://')) {
             $relativePath = str_replace(['public/', 'storage/'], '', $message->media_url);
-            $path = \Illuminate\Support\Facades\Storage::disk('public')->path($relativePath);
 
-            if (!file_exists($path)) {
-                $path = storage_path('app/' . $relativePath); // fallback to private storage
+            if (!\Illuminate\Support\Facades\Storage::disk($disk)->exists($relativePath)) {
+                // If it's not on the active disk, check the public disk as a fallback (for backward compatibility)
+                if ($disk !== 'public' && \Illuminate\Support\Facades\Storage::disk('public')->exists($relativePath)) {
+                    $contentType = $message->media_mime_type ?: \Illuminate\Support\Facades\Storage::disk('public')->mimeType($relativePath) ?: 'application/octet-stream';
+                    return \Illuminate\Support\Facades\Storage::disk('public')->response($relativePath, null, [
+                        'Content-Type' => $contentType,
+                        'Cache-Control' => 'max-age=86400, public'
+                    ]);
+                }
+                
+                // Fallback to private local storage path if it was saved directly in app/
+                $path = storage_path('app/' . $relativePath);
+                if (file_exists($path)) {
+                    $contentType = $message->media_mime_type ?: mime_content_type($path) ?: 'application/octet-stream';
+                    return response()->file($path, [
+                        'Content-Type' => $contentType,
+                        'Cache-Control' => 'max-age=86400, public'
+                    ]);
+                }
+
+                abort(404, 'Media file not found');
             }
 
-            if (!file_exists($path)) {
-                abort(404, 'Local media file not found');
-            }
-
-            $contentType = $message->media_mime_type ?: mime_content_type($path) ?: 'application/octet-stream';
-            return response()->file($path, [
+            $contentType = $message->media_mime_type ?: \Illuminate\Support\Facades\Storage::disk($disk)->mimeType($relativePath) ?: 'application/octet-stream';
+            return \Illuminate\Support\Facades\Storage::disk($disk)->response($relativePath, null, [
                 'Content-Type' => $contentType,
                 'Cache-Control' => 'max-age=86400, public'
             ]);
@@ -146,7 +162,7 @@ class MediaController extends Controller
                 $storedFolder = 'conversations/' . $conversation->id;
                 $relativePath = $storedFolder . '/' . $fileName;
 
-                \Illuminate\Support\Facades\Storage::disk('public')->put($relativePath, $response->body());
+                \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $response->body());
 
                 // Update the message so next time it is loaded directly from local storage
                 $message->update([

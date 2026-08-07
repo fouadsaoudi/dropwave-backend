@@ -229,6 +229,21 @@ class ProcessWebhookJob implements ShouldQueue
             $lat = $msg['location']['latitude'] ?? null;
             $lng = $msg['location']['longitude'] ?? null;
 
+            if ($type === 'location') {
+                $locationData = $msg['location'] ?? [];
+                $locName = $locationData['name'] ?? null;
+                $locAddress = $locationData['address'] ?? null;
+                if ($locName && $locAddress) {
+                    $body = "{$locName}\n{$locAddress}";
+                } elseif ($locName) {
+                    $body = $locName;
+                } elseif ($locAddress) {
+                    $body = $locAddress;
+                } else {
+                    $body = "Shared location: Lat {$lat}, Lng {$lng}";
+                }
+            }
+
             $mediaUrl = null;
             $mediaMimeType = null;
             $mediaFilename = null;
@@ -237,6 +252,7 @@ class ProcessWebhookJob implements ShouldQueue
             if (!$body && in_array($type, ['image', 'video', 'document'])) {
                 $body = $msg[$type]['caption'] ?? null;
             }
+
 
             // Extract media files metadata
             if (in_array($type, ['image', 'video', 'audio', 'document', 'sticker'])) {

@@ -115,6 +115,29 @@ class DashboardController extends Controller
             ];
         }
 
+        $deliveryStats = null;
+        if ($tenant->isDeliveryCoordination()) {
+            $totalOrders = DB::table('orders')->where('tenant_id', $tenantId)->count();
+            $pendingOrders = DB::table('orders')->where('tenant_id', $tenantId)->where('status', 'pending')->count();
+            $deliveredOrders = DB::table('orders')->where('tenant_id', $tenantId)->where('status', 'delivered')->count();
+
+            // Driver breakdown of delivered orders
+            $driverBreakdown = DB::table('orders')
+                ->join('drivers', 'orders.driver_id', '=', 'drivers.id')
+                ->where('orders.tenant_id', $tenantId)
+                ->where('orders.status', 'delivered')
+                ->select('drivers.name', DB::raw('count(orders.id) as count'))
+                ->groupBy('drivers.name')
+                ->get();
+
+            $deliveryStats = [
+                'total_orders' => $totalOrders,
+                'pending_orders' => $pendingOrders,
+                'delivered_orders' => $deliveredOrders,
+                'driver_breakdown' => $driverBreakdown
+            ];
+        }
+
         return response()->json([
             'channels_count' => $connectedWabas,
             'active_conversations' => $activeConversations,
@@ -133,7 +156,8 @@ class DashboardController extends Controller
             'start_date' => $startOfTargetMonth->format('Y-m-d'),
             'end_date' => $endOfTargetMonth->format('Y-m-d'),
             'billing' => array_merge($currentBilling, ['currency' => 'USD']),
-            'history' => $history
+            'history' => $history,
+            'delivery_stats' => $deliveryStats
         ]);
     }
 

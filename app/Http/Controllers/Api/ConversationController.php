@@ -32,6 +32,24 @@ class ConversationController extends Controller
     {
         $query = Conversation::with(['contact', 'assignee', 'channel']);
 
+        $user = $request->user();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+
+        if ($isDelivery) {
+            $driverPhones = \App\Models\Driver::pluck('phone_number')->toArray();
+            
+            if ($request->has('drivers') && ($request->drivers === 'true' || $request->drivers === true || $request->drivers === 1 || $request->drivers === '1')) {
+                $query->whereHas('contact', function ($q) use ($driverPhones) {
+                    $q->whereIn('phone_number', $driverPhones);
+                });
+            } else {
+                $query->whereHas('contact', function ($q) use ($driverPhones) {
+                    $q->whereNotIn('phone_number', $driverPhones);
+                });
+            }
+        }
+
         // Filter by status if provided
         if ($request->has('status')) {
             $query->where('status', $request->status);
@@ -40,7 +58,6 @@ class ConversationController extends Controller
             $query->whereIn('status', ['open']);
         }
 
-        $user = $request->user();
         if ($user->isAgent()) {
             $query->where(function ($q) use ($user) {
                 $q->where('assigned_to', $user->id)
@@ -80,10 +97,13 @@ class ConversationController extends Controller
     public function counts(Request $request)
     {
         $user = $request->user();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
 
         $activeQuery = Conversation::where('status', 'open')->whereNotNull('assigned_to');
         $unassignedQuery = Conversation::where('status', 'open')->whereNull('assigned_to');
         $resolvedQuery = Conversation::where('status', 'resolved');
+        $driversQuery = Conversation::where('status', 'open');
 
         if ($user->isAgent()) {
             $activeQuery->where('assigned_to', $user->id);
@@ -91,10 +111,28 @@ class ConversationController extends Controller
             $resolvedQuery->where('assigned_to', $user->id);
         }
 
+        if ($isDelivery) {
+            $driverPhones = \App\Models\Driver::pluck('phone_number')->toArray();
+            
+            $activeQuery->whereHas('contact', function ($q) use ($driverPhones) {
+                $q->whereNotIn('phone_number', $driverPhones);
+            });
+            $unassignedQuery->whereHas('contact', function ($q) use ($driverPhones) {
+                $q->whereNotIn('phone_number', $driverPhones);
+            });
+            $resolvedQuery->whereHas('contact', function ($q) use ($driverPhones) {
+                $q->whereNotIn('phone_number', $driverPhones);
+            });
+            $driversQuery->whereHas('contact', function ($q) use ($driverPhones) {
+                $q->whereIn('phone_number', $driverPhones);
+            });
+        }
+
         return response()->json([
             'active' => $activeQuery->count(),
             'unassigned' => $unassignedQuery->count(),
-            'resolved' => $resolvedQuery->count()
+            'resolved' => $resolvedQuery->count(),
+            'drivers' => $isDelivery ? $driversQuery->count() : 0
         ]);
     }
 
@@ -821,4 +859,102 @@ class ConversationController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Send a location request message to the customer.
+     */
+    public function requestLocation(Request $request, $id)
+    {
+        $conversation = Conversation::with('channel', 'contact')->find($id);
+
+        if (!$conversation) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Conversation not found.'
+            ], 404);
+        }
+
+        $user = $request->user();
+
+        // Check permissions
+        $isManagerOrAdmin = $user->isManager() || $user->isAdmin();
+        if (!$isManagerOrAdmin) {
+            if ($user->isAgent()) {
+                if ($conversation->assigned_to !== $user->id) {
+                    return response()->json([
+                        'error' => 'forbidden',
+                        'message' => 'You must claim this conversation before requesting location.'
+                    ], 403);
+                }
+            }
+        }
+
+        // 1. Enforce WhatsApp 24-hour service policy window
+        if ($conversation->isWindowClosed()) {
+            return response()->json([
+                'error' => 'policy_violation',
+                'message' => 'The WhatsApp 24-hour customer service window has expired. You can only send pre-approved template messages to this contact.'
+            ], 422);
+        }
+
+        $request->validate([
+            'body' => 'required|string|max:1024'
+        ]);
+
+        $bodyText = $request->input('body');
+        $channel = $conversation->channel;
+        $contact = $conversation->contact;
+
+        try {
+            // 2. Dispatch interactive location request message
+            $metaResponse = $this->metaService->sendLocationRequestMessage(
+                $channel->decrypted_token,
+                $channel->phone_number_id,
+                $contact->phone_number,
+                $bodyText
+            );
+
+            $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+
+            // 3. Save outbound message record in database as text type
+            $message = Message::create([
+                'tenant_id' => $conversation->tenant_id,
+                'conversation_id' => $conversation->id,
+                'direction' => 'outbound',
+                'type' => 'text',
+                'body' => $bodyText,
+                'whatsapp_msg_id' => $whatsappMsgId,
+                'status' => 'sent',
+                'sent_by' => Auth::id(),
+                'sent_at' => now(),
+            ]);
+
+            // 4. Update conversation timeline details
+            $conversation->update([
+                'last_message_body' => $bodyText,
+                'last_message_at' => now(),
+            ]);
+
+            // Load sender relationship to broadcast it
+            $message->load('sender');
+
+            // 5. Broadcast live socket events
+            $conversation->load(['contact', 'channel', 'assignee']);
+            broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
+            broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+
+            return response()->json($message);
+
+        } catch (Exception $e) {
+            Log::error("Failed to send location request to conversation {$id}", [
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'error' => 'failed_send',
+                'message' => $e->getMessage()
+            ], 422);
+        }
+    }
 }
+

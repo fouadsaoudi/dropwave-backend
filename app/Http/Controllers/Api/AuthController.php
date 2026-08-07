@@ -54,6 +54,7 @@ class AuthController extends Controller
                 'id' => $user->tenant->id,
                 'name' => $user->tenant->name,
                 'slug' => $user->tenant->slug,
+                'type' => $user->tenant->type,
             ] : null,
         ]);
     }

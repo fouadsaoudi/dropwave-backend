@@ -221,7 +221,7 @@ class AdminController extends Controller
 
         $billingService = resolve(\App\Services\TenantBillingService::class);
         $tenants = Tenant::withCount('channels')
-            ->get(['id', 'name', 'slug', 'contact_name', 'email', 'phone', 'is_active', 'created_at']);
+            ->get(['id', 'name', 'slug', 'contact_name', 'email', 'phone', 'type', 'is_active', 'created_at']);
 
         $billingMonthStr = $request->input('billing_month');
         $month = $billingMonthStr 
@@ -434,6 +434,7 @@ class AdminController extends Controller
             'slug' => 'required|string|unique:tenants,slug|max:255',
             'email' => 'required|email|unique:tenants,email|max:255',
             'phone' => 'nullable|string|max:50',
+            'type' => 'nullable|string|in:large_messaging_limit,delivery_coordination',
         ]);
 
         $tenant = Tenant::create([
@@ -441,6 +442,7 @@ class AdminController extends Controller
             'slug' => $request->slug,
             'email' => $request->email,
             'phone' => $request->phone,
+            'type' => $request->type ?? 'large_messaging_limit',
             'is_active' => true,
         ]);
 
@@ -474,6 +476,7 @@ class AdminController extends Controller
             'contact_name' => 'nullable|string|max:255',
             'email' => 'required|email|max:255|unique:tenants,email,' . $tenant->id,
             'phone' => 'nullable|string|max:50',
+            'type' => 'nullable|string|in:large_messaging_limit,delivery_coordination',
             'is_active' => 'required|boolean',
         ]);
 
@@ -483,6 +486,7 @@ class AdminController extends Controller
             'contact_name' => $request->contact_name,
             'email' => $request->email,
             'phone' => $request->phone,
+            'type' => $request->type ?? $tenant->type,
             'is_active' => $request->is_active,
         ]);
 

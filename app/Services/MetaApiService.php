@@ -474,4 +474,39 @@ class MetaApiService
 
         return $response->json();
     }
+
+    /**
+     * Send a location request message to a WhatsApp number.
+     */
+    public function sendLocationRequestMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $response = Http::withToken($accessToken)->post($url, [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'location_request_message',
+                'body' => [
+                    'text' => $bodyText,
+                ],
+                'action' => [
+                    'name' => 'send_location',
+                ]
+            ]
+        ]);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp location request via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send location request failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
 }
+

@@ -24,6 +24,7 @@ class ListConversationsRequest extends FormRequest
             'assigned_to' => 'nullable|integer',
             'unassigned' => 'nullable',
             'assigned' => 'nullable',
+            'drivers' => 'nullable',
         ];
     }
 }

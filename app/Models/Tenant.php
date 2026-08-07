@@ -14,12 +14,18 @@ class Tenant extends Model
         'contact_name',
         'email',
         'phone',
+        'type',
         'is_active',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
     ];
+
+    public function isDeliveryCoordination(): bool
+    {
+        return $this->type === 'delivery_coordination';
+    }
 
     public function users(): HasMany
     {
@@ -49,5 +55,15 @@ class Tenant extends Model
     public function billingSnapshots(): HasMany
     {
         return $this->hasMany(TenantBillingSnapshot::class);
+    }
+
+    public function drivers(): HasMany
+    {
+        return $this->hasMany(Driver::class);
+    }
+
+    public function orders(): HasMany
+    {
+        return $this->hasMany(Order::class);
     }
 }

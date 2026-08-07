@@ -45,8 +45,23 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/resolve', [ConversationController::class, 'resolve']);
     Route::post('/conversations/{id}/reopen', [ConversationController::class, 'reopen']);
     Route::post('/conversations/{id}/messages', [ConversationController::class, 'sendMessage']);
+    Route::post('/conversations/{id}/request-location', [ConversationController::class, 'requestLocation']);
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
     Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);
+
+    // Drivers
+    Route::get('/drivers', [\App\Http\Controllers\Api\DriverController::class, 'index']);
+    Route::post('/drivers', [\App\Http\Controllers\Api\DriverController::class, 'store']);
+    Route::put('/drivers/{id}', [\App\Http\Controllers\Api\DriverController::class, 'update']);
+    Route::delete('/drivers/{id}', [\App\Http\Controllers\Api\DriverController::class, 'destroy']);
+
+    // Orders
+    Route::post('/conversations/{id}/send-order', [\App\Http\Controllers\Api\OrderController::class, 'store']);
+    Route::get('/orders', [\App\Http\Controllers\Api\OrderController::class, 'index']);
+    Route::put('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class, 'update']);
+
+
+
 
     // Calling
     Route::get('/conversations/{id}/calls', [CallController::class, 'index']);

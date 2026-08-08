@@ -60,9 +60,20 @@ class OrderController extends Controller
             ], 422);
         }
 
-        // 4. Resolve the tenant's primary WABA channel
-        $channel = WabaChannel::where('tenant_id', $user->tenant_id)->where('is_primary', true)->first()
-            ?? WabaChannel::where('tenant_id', $user->tenant_id)->first();
+        // 4. Resolve the WABA channel from the customer's conversation
+        $customerConversation = Conversation::find($conversationId);
+        $channel = null;
+        if ($customerConversation) {
+            $channel = WabaChannel::where('tenant_id', $user->tenant_id)
+                ->where('id', $customerConversation->channel_id)
+                ->first();
+        }
+
+        // Fallback to the tenant's primary/first WABA channel
+        if (!$channel) {
+            $channel = WabaChannel::where('tenant_id', $user->tenant_id)->where('is_primary', true)->first()
+                ?? WabaChannel::where('tenant_id', $user->tenant_id)->first();
+        }
 
         if (!$channel || !$channel->decrypted_token) {
             return response()->json([
@@ -136,6 +147,10 @@ class OrderController extends Controller
                         'last_message_at' => now(),
                         'last_message_body' => substr($formattedText, 0, 50),
                     ]);
+                } else {
+                    $driverConversation->update([
+                        'channel_id' => $channel->id,
+                    ]);
                 }
 
                 $message = Message::create([
@@ -172,9 +187,14 @@ class OrderController extends Controller
                 'error' => $e->getMessage()
             ]);
 
+            $message = $e->getMessage();
+            if (str_contains($message, '131030') || str_contains($message, 'not in allowed list')) {
+                $message .= " (Meta Sandbox restriction: You must add the driver's phone number to your WhatsApp Sandbox test numbers list on the Meta Developer Portal.)";
+            }
+
             return response()->json([
                 'error' => 'failed_send',
-                'message' => 'Failed to transmit order details via WhatsApp: ' . $e->getMessage()
+                'message' => 'Failed to transmit order details via WhatsApp: ' . $message
             ], 422);
         }
     }

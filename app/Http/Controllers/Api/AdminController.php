@@ -432,6 +432,7 @@ class AdminController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'slug' => 'required|string|unique:tenants,slug|max:255',
+            'contact_name' => 'nullable|string|max:255',
             'email' => 'required|email|unique:tenants,email|max:255',
             'phone' => 'nullable|string|max:50',
             'type' => 'nullable|string|in:large_messaging_limit,delivery_coordination',
@@ -440,6 +441,7 @@ class AdminController extends Controller
         $tenant = Tenant::create([
             'name' => $request->name,
             'slug' => $request->slug,
+            'contact_name' => $request->contact_name,
             'email' => $request->email,
             'phone' => $request->phone,
             'type' => $request->type ?? 'large_messaging_limit',

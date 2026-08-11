@@ -476,6 +476,36 @@ class MetaApiService
     }
 
     /**
+     * Send a sticker message using a Meta media ID.
+     */
+    public function sendStickerMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'sticker',
+            'sticker' => [
+                'id' => $mediaId
+            ]
+        ];
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp sticker message via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send sticker message failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Send a location request message to a WhatsApp number.
      */
     public function sendLocationRequestMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText): array
@@ -504,6 +534,44 @@ class MetaApiService
                 'status' => $response->status(),
             ]);
             throw new Exception('Meta API send location request failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Send an interactive CTA URL button message to a WhatsApp number.
+     */
+    public function sendCtaUrlMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText, string $buttonText, string $url): array
+    {
+        $urlEndpoint = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $response = Http::withToken($accessToken)->post($urlEndpoint, [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'cta_url',
+                'body' => [
+                    'text' => $bodyText,
+                ],
+                'action' => [
+                    'name' => 'cta_url',
+                    'parameters' => [
+                        'display_text' => $buttonText,
+                        'url' => $url,
+                    ]
+                ]
+            ]
+        ]);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp CTA URL message via {$phoneNumberId} to {$to}", [
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send CTA URL message failed: ' . $response->body());
         }
 
         return $response->json();

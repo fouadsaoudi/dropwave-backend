@@ -19,6 +19,13 @@ class Address extends Model
         'state',
         'postal_code',
         'country',
+        'latitude',
+        'longitude',
+    ];
+
+    protected $casts = [
+        'latitude' => 'decimal:8',
+        'longitude' => 'decimal:8',
     ];
 
     public function tenant(): BelongsTo

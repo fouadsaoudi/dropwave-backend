@@ -38,6 +38,7 @@ class OrderController extends Controller
             'order_details' => 'required|string|max:2000',
             'latitude' => 'nullable|numeric',
             'longitude' => 'nullable|numeric',
+            'lang' => 'nullable|string|in:ar,en',
         ]);
 
         // 2. Fetch driver and verify workspace scoping
@@ -108,18 +109,35 @@ class OrderController extends Controller
                 $formattedText .= "*Address:* " . $request->delivery_address . "\n\n";
                 $formattedText .= "*Items & Details:*\n" . $request->order_details . "\n";
 
+                // Save full text to database log (with location link)
+                $dbText = $formattedText;
                 if ($lat && $lng) {
-                    $formattedText .= "\n📍 *Delivery Location:*\n";
-                    $formattedText .= "https://www.google.com/maps/search/?api=1&query=" . $lat . "," . $lng;
+                    $dbText .= "\n📍 *Delivery Location:*\n";
+                    $dbText .= "https://www.google.com/maps/search/?api=1&query=" . $lat . "," . $lng;
                 }
 
-                // c. Send the WhatsApp message to the driver
-                $metaResponse = $this->metaService->sendTextMessage(
-                    $channel->decrypted_token,
-                    $channel->phone_number_id,
-                    $driver->phone_number,
-                    $formattedText
-                );
+                // c. Send the WhatsApp message to the driver (CTA interactive message if coords exist)
+                if ($lat && $lng) {
+                    $mapsUrl = "https://www.google.com/maps/search/?api=1&query=" . $lat . "," . $lng;
+                    $lang = $request->input('lang', 'en');
+                    $buttonText = ($lang === 'ar') ? "فتح الخريطة" : "Open Map";
+
+                    $metaResponse = $this->metaService->sendCtaUrlMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $driver->phone_number,
+                        $formattedText,
+                        $buttonText,
+                        $mapsUrl
+                    );
+                } else {
+                    $metaResponse = $this->metaService->sendTextMessage(
+                        $channel->decrypted_token,
+                        $channel->phone_number_id,
+                        $driver->phone_number,
+                        $formattedText
+                    );
+                }
 
                 $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
 
@@ -145,7 +163,7 @@ class OrderController extends Controller
                         'status' => 'open',
                         'window_expires_at' => now()->addHours(24),
                         'last_message_at' => now(),
-                        'last_message_body' => substr($formattedText, 0, 50),
+                        'last_message_body' => substr($dbText, 0, 50),
                     ]);
                 } else {
                     $driverConversation->update([
@@ -158,7 +176,7 @@ class OrderController extends Controller
                     'conversation_id' => $driverConversation->id,
                     'direction' => 'outbound',
                     'type' => 'text',
-                    'body' => $formattedText,
+                    'body' => $dbText,
                     'whatsapp_msg_id' => $whatsappMsgId,
                     'status' => 'sent',
                     'sent_by' => $user->id,

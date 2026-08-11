@@ -267,7 +267,7 @@ class ConversationMediaTest extends TestCase
 
             $response->assertStatus(200);
             $response->assertHeader('Content-Type', 'image/png');
-            $this->assertEquals('fake binary content of image from proxy', $response->getContent());
+            $this->assertEquals('fake binary content of image from proxy', $response->streamedContent());
 
             // Refresh message and check if cached locally on the disk
             $message->refresh();

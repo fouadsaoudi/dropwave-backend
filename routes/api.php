@@ -49,6 +49,12 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
     Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);
 
+    // Stickers
+    Route::get('/stickers', [\App\Http\Controllers\Api\StickerController::class, 'index']);
+    Route::post('/stickers', [\App\Http\Controllers\Api\StickerController::class, 'store']);
+    Route::get('/stickers/{id}/file', [\App\Http\Controllers\Api\StickerController::class, 'getFile']);
+    Route::delete('/stickers/{id}', [\App\Http\Controllers\Api\StickerController::class, 'destroy']);
+
     // Drivers
     Route::get('/drivers', [\App\Http\Controllers\Api\DriverController::class, 'index']);
     Route::post('/drivers', [\App\Http\Controllers\Api\DriverController::class, 'store']);
@@ -79,6 +85,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'index']);
     Route::post('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'store']);
     Route::delete('/addresses/{id}', [\App\Http\Controllers\Api\AddressController::class, 'destroy']);
+    Route::get('/geocoding/reverse', [\App\Http\Controllers\Api\AddressController::class, 'reverseGeocode']);
 
     // Templates
     Route::get('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'index']);

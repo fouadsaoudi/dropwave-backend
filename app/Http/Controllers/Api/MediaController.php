@@ -60,6 +60,13 @@ class MediaController extends Controller
                 // If it's not on the active disk, check the public disk as a fallback (for backward compatibility)
                 if ($disk !== 'public' && \Illuminate\Support\Facades\Storage::disk('public')->exists($relativePath)) {
                     $contentType = $message->media_mime_type ?: \Illuminate\Support\Facades\Storage::disk('public')->mimeType($relativePath) ?: 'application/octet-stream';
+                    $fullPath = \Illuminate\Support\Facades\Storage::disk('public')->path($relativePath);
+                    if (file_exists($fullPath)) {
+                        return response()->file($fullPath, [
+                            'Content-Type' => $contentType,
+                            'Cache-Control' => 'max-age=86400, public'
+                        ]);
+                    }
                     return \Illuminate\Support\Facades\Storage::disk('public')->response($relativePath, null, [
                         'Content-Type' => $contentType,
                         'Cache-Control' => 'max-age=86400, public'
@@ -80,6 +87,13 @@ class MediaController extends Controller
             }
 
             $contentType = $message->media_mime_type ?: \Illuminate\Support\Facades\Storage::disk($disk)->mimeType($relativePath) ?: 'application/octet-stream';
+            $fullPath = \Illuminate\Support\Facades\Storage::disk($disk)->path($relativePath);
+            if (file_exists($fullPath)) {
+                return response()->file($fullPath, [
+                    'Content-Type' => $contentType,
+                    'Cache-Control' => 'max-age=86400, public'
+                ]);
+            }
             return \Illuminate\Support\Facades\Storage::disk($disk)->response($relativePath, null, [
                 'Content-Type' => $contentType,
                 'Cache-Control' => 'max-age=86400, public'
@@ -105,7 +119,7 @@ class MediaController extends Controller
                 $apiVersion = config('services.meta.api_version', 'v20.0');
                 $metaUrl = "https://graph.facebook.com/{$apiVersion}/{$message->media_filename}";
                 
-                $metaResponse = Http::withHeaders([
+                $metaResponse = Http::timeout(30)->connectTimeout(10)->withHeaders([
                     'Authorization' => 'Bearer ' . $channel->decrypted_token
                 ])->get($metaUrl);
                 
@@ -123,59 +137,91 @@ class MediaController extends Controller
                 abort(404, 'Media URL not available');
             }
 
-            // Fetch the media content using the decrypted token
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $channel->decrypted_token
-            ])->get($mediaUrl);
+            $contentType = $message->media_mime_type ?: 'application/octet-stream';
+            $mediaId = $message->media_filename ?: uniqid();
+            
+            $extension = 'bin';
+            if ($contentType && $contentType !== 'application/octet-stream') {
+                $mimeParts = explode('/', $contentType);
+                if (count($mimeParts) === 2) {
+                    $extension = $mimeParts[1];
+                    if (str_contains($extension, ';')) {
+                        $extension = explode(';', $extension)[0];
+                    }
+                }
+            }
+            
+            if ($extension === 'jpeg') {
+                $extension = 'jpg';
+            }
+            if ($contentType === 'audio/ogg' || $contentType === 'audio/ogg; codecs=opus') {
+                $extension = 'ogg';
+            }
+
+            $fileName = $mediaId . '.' . $extension;
+            $storedFolder = 'conversations/' . $conversation->id;
+            $relativePath = $storedFolder . '/' . $fileName;
+            $tempPath = storage_path('app/temp_proxy_' . uniqid() . '.' . $extension);
+
+            // Fetch the media content using the decrypted token and stream sink
+            $response = Http::timeout(300)
+                ->connectTimeout(15)
+                ->withOptions(['sink' => $tempPath])
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $channel->decrypted_token
+                ])->get($mediaUrl);
             
             if (!$response->successful()) {
+                if (file_exists($tempPath)) {
+                    @unlink($tempPath);
+                }
                 // Return a clean 502 Bad Gateway instead of downstreaming Meta's 401/403
                 // to avoid Laravel converting it into an Unauthenticated session error
                 abort(502, 'Meta attachment server returned error code ' . $response->status());
             }
-            
-            $contentType = $message->media_mime_type ?: $response->header('Content-Type') ?: 'application/octet-stream';
-            
+
+            if (!$message->media_mime_type && $response->header('Content-Type')) {
+                $contentType = $response->header('Content-Type');
+            }
+
             // Cache downloaded media locally inside conversation folder and update database record
             try {
-                $mediaId = $message->media_filename ?: uniqid();
-                
-                $extension = 'bin';
-                if ($contentType) {
-                    $mimeParts = explode('/', $contentType);
-                    if (count($mimeParts) === 2) {
-                        $extension = $mimeParts[1];
-                        if (str_contains($extension, ';')) {
-                            $extension = explode(';', $extension)[0];
-                        }
+                if (file_exists($tempPath) && filesize($tempPath) > 0) {
+                    $stream = fopen($tempPath, 'r');
+                    \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $stream);
+                    if (is_resource($stream)) {
+                        fclose($stream);
                     }
+                    @unlink($tempPath);
+                } else {
+                    \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $response->body());
                 }
-                
-                if ($extension === 'jpeg') {
-                    $extension = 'jpg';
-                }
-                if ($contentType === 'audio/ogg' || $contentType === 'audio/ogg; codecs=opus') {
-                    $extension = 'ogg';
-                }
-
-                $fileName = $mediaId . '.' . $extension;
-                $storedFolder = 'conversations/' . $conversation->id;
-                $relativePath = $storedFolder . '/' . $fileName;
-
-                \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $response->body());
 
                 // Update the message so next time it is loaded directly from local storage
                 $message->update([
                     'media_url' => 'storage/' . $relativePath
                 ]);
+
+                // Serve directly from local storage with BinaryFileResponse (supporting Range / 206 Partial Content)
+                $fullPath = \Illuminate\Support\Facades\Storage::disk($disk)->path($relativePath);
+                if (file_exists($fullPath)) {
+                    return response()->file($fullPath, [
+                        'Content-Type' => $contentType,
+                        'Cache-Control' => 'max-age=86400, public'
+                    ]);
+                }
+                return \Illuminate\Support\Facades\Storage::disk($disk)->response($relativePath, null, [
+                    'Content-Type' => $contentType,
+                    'Cache-Control' => 'max-age=86400, public'
+                ]);
             } catch (\Exception $e) {
+                if (file_exists($tempPath)) {
+                    @unlink($tempPath);
+                }
                 \Illuminate\Support\Facades\Log::warning("MediaController: Failed to cache proxy media locally for message: " . $message->id . ", error: " . $e->getMessage());
             }
             
-            return response($response->body(), 200)
-                ->header('Content-Type', $contentType)
-                ->header('Cache-Control', 'max-age=86400, public');
-                
+            abort(500, 'Failed to store proxy media file.');
         } catch (Exception $e) {
             abort(500, 'Error proxying media request: ' . $e->getMessage());
         }

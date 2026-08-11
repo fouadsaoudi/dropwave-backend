@@ -269,44 +269,60 @@ class ProcessWebhookJob implements ShouldQueue
                             $apiVersion = config('services.meta.api_version', 'v20.0');
                             $metaUrl = "https://graph.facebook.com/{$apiVersion}/{$mediaId}";
 
-                            $metaResponse = Http::withHeaders([
+                            $metaResponse = Http::timeout(30)->connectTimeout(10)->withHeaders([
                                 'Authorization' => 'Bearer ' . $channel->decrypted_token
                             ])->get($metaUrl);
 
                             if ($metaResponse->successful()) {
                                 $downloadUrl = $metaResponse->json('url');
                                 if ($downloadUrl) {
-                                    $downloadResponse = Http::withHeaders([
-                                        'Authorization' => 'Bearer ' . $channel->decrypted_token
-                                    ])->get($downloadUrl);
-
-                                    if ($downloadResponse->successful()) {
-                                        $extension = 'bin';
-                                        if ($mediaMimeType) {
-                                            $mimeParts = explode('/', $mediaMimeType);
-                                            if (count($mimeParts) === 2) {
-                                                $extension = $mimeParts[1];
-                                                if (str_contains($extension, ';')) {
-                                                    $extension = explode(';', $extension)[0];
-                                                }
+                                    $extension = 'bin';
+                                    if ($mediaMimeType) {
+                                        $mimeParts = explode('/', $mediaMimeType);
+                                        if (count($mimeParts) === 2) {
+                                            $extension = $mimeParts[1];
+                                            if (str_contains($extension, ';')) {
+                                                $extension = explode(';', $extension)[0];
                                             }
                                         }
+                                    }
 
-                                        if ($extension === 'jpeg') {
-                                            $extension = 'jpg';
+                                    if ($extension === 'jpeg') {
+                                        $extension = 'jpg';
+                                    }
+                                    if ($mediaMimeType === 'audio/ogg' || $mediaMimeType === 'audio/ogg; codecs=opus') {
+                                        $extension = 'ogg';
+                                    }
+
+                                    $fileName = $mediaId . '.' . $extension;
+                                    $storedFolder = 'conversations/' . $conversation->id;
+                                    $relativePath = $storedFolder . '/' . $fileName;
+                                    $tempPath = storage_path('app/temp_' . uniqid() . '.' . $extension);
+
+                                    $downloadResponse = Http::timeout(300)
+                                        ->connectTimeout(15)
+                                        ->withOptions(['sink' => $tempPath])
+                                        ->withHeaders([
+                                            'Authorization' => 'Bearer ' . $channel->decrypted_token
+                                        ])->get($downloadUrl);
+
+                                    if ($downloadResponse->successful()) {
+                                        if (file_exists($tempPath) && filesize($tempPath) > 0) {
+                                            $stream = fopen($tempPath, 'r');
+                                            \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $stream);
+                                            if (is_resource($stream)) {
+                                                fclose($stream);
+                                            }
+                                            @unlink($tempPath);
+                                        } else {
+                                            \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $downloadResponse->body());
                                         }
-                                        if ($mediaMimeType === 'audio/ogg' || $mediaMimeType === 'audio/ogg; codecs=opus') {
-                                            $extension = 'ogg';
-                                        }
-
-                                        $fileName = $mediaId . '.' . $extension;
-                                        $storedFolder = 'conversations/' . $conversation->id;
-                                        $relativePath = $storedFolder . '/' . $fileName;
-
-                                        \Illuminate\Support\Facades\Storage::disk($disk)->put($relativePath, $downloadResponse->body());
 
                                         $mediaUrl = 'storage/' . $relativePath;
                                     } else {
+                                        if (file_exists($tempPath)) {
+                                            @unlink($tempPath);
+                                        }
                                         Log::warning("ProcessWebhookJob: Failed to download media content from Meta for ID: " . $mediaId, [
                                             'status' => $downloadResponse->status()
                                         ]);

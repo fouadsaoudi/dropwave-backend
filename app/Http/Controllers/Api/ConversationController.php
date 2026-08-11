@@ -362,11 +362,14 @@ class ConversationController extends Controller
                 $mediaMimeType = $file->getClientMimeType() ?: 'application/octet-stream';
                 $mediaFilename = $file->getClientOriginalName();
                 $isVoiceMessage = str_starts_with(strtolower($mediaFilename), 'voice_record');
+                $extension = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'bin');
 
                 // Determine message media type
-                if (str_starts_with($mediaMimeType, 'image/') && $mediaMimeType !== 'image/svg+xml') {
+                if (($mediaMimeType === 'image/webp' || $extension === 'webp') && $file->getSize() <= 512000) {
+                    $msgType = 'sticker';
+                } elseif (str_starts_with($mediaMimeType, 'image/') && $mediaMimeType !== 'image/svg+xml') {
                     $msgType = 'image';
-                } elseif (str_starts_with($mediaMimeType, 'video/')) {
+                } elseif (str_starts_with($mediaMimeType, 'video/') || in_array($extension, ['mp4', '3gp'])) {
                     $msgType = 'video';
                 } elseif (str_starts_with($mediaMimeType, 'audio/')) {
                     $msgType = 'audio';
@@ -378,11 +381,15 @@ class ConversationController extends Controller
                 $metaUploadMimeType = in_array($mediaMimeType, ['text/csv', 'application/csv', 'text/x-csv'])
                     ? 'text/plain'
                     : $mediaMimeType;
+
+                if ($msgType === 'video' && !str_starts_with($metaUploadMimeType, 'video/')) {
+                    $metaUploadMimeType = $extension === '3gp' ? 'video/3gpp' : 'video/mp4';
+                    $mediaMimeType = $metaUploadMimeType;
+                }
                 
                 $disk = config('filesystems.media_disk', 'public');
                 
                 // Store local copy on server temporarily for transcoding and/or uploading
-                $extension = $file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'bin';
                 if ($mediaMimeType === 'audio/mp4' && $extension === 'mp4') {
                     $extension = 'm4a';
                 }
@@ -464,6 +471,13 @@ class ConversationController extends Controller
                             $metaMediaId,
                             $request->body // caption
                         );
+                    } elseif ($msgType === 'sticker') {
+                        $metaResponse = $this->metaService->sendStickerMessage(
+                            $channel->decrypted_token,
+                            $channel->phone_number_id,
+                            $contact->phone_number,
+                            $metaMediaId
+                        );
                     } elseif ($msgType === 'video') {
                         $metaResponse = $this->metaService->sendVideoMessage(
                             $channel->decrypted_token,
@@ -532,6 +546,7 @@ class ConversationController extends Controller
             // 4. Update conversation metadata
             $lastSnippet = match ($msgType) {
                 'image' => '📷 Photo',
+                'sticker' => '✨ Sticker',
                 'video' => '🎥 Video',
                 'audio' => '🎵 Audio',
                 'document' => '📄 ' . ($mediaFilename ?: 'File'),
@@ -957,4 +972,3 @@ class ConversationController extends Controller
         }
     }
 }
-

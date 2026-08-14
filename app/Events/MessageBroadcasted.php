@@ -59,6 +59,13 @@ class MessageBroadcasted implements ShouldBroadcastNow
         $contact = $conversation?->contact 
             ?? ($conversation ? \App\Models\Contact::withoutGlobalScopes()->find($conversation->contact_id) : null);
 
+        if ($contact && $conversation) {
+            $isDelivery = $conversation->tenant && $conversation->tenant->type === 'delivery_coordination';
+            if ($isDelivery) {
+                $contact->load('driver');
+            }
+        }
+
         $messageData['contact_name'] = $contact?->name;
         $messageData['contact_phone'] = $contact?->phone_number;
         $messageData['conversation_assigned_to'] = $conversation?->assigned_to;

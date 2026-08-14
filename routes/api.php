@@ -93,6 +93,21 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::delete('/templates/{id}', [\App\Http\Controllers\Api\TemplateController::class, 'destroy']);
     Route::post('/templates/sync', [\App\Http\Controllers\Api\TemplateController::class, 'sync']);
 
+    // Campaigns
+    Route::get('/campaigns', [\App\Http\Controllers\Api\CampaignController::class, 'index']);
+    Route::post('/campaigns', [\App\Http\Controllers\Api\CampaignController::class, 'store']);
+    Route::get('/campaigns/{id}', [\App\Http\Controllers\Api\CampaignController::class, 'show']);
+    Route::delete('/campaigns/{id}', [\App\Http\Controllers\Api\CampaignController::class, 'destroy']);
+    Route::post('/campaigns/{id}/start', [\App\Http\Controllers\Api\CampaignController::class, 'start']);
+    Route::get('/opt-outs', [\App\Http\Controllers\Api\CampaignController::class, 'optOutsIndex']);
+
+    // Contact Categories
+    Route::get('/contact-categories', [\App\Http\Controllers\Api\ContactCategoryController::class, 'index']);
+    Route::post('/contact-categories', [\App\Http\Controllers\Api\ContactCategoryController::class, 'store']);
+    Route::put('/contact-categories/{id}', [\App\Http\Controllers\Api\ContactCategoryController::class, 'update']);
+    Route::delete('/contact-categories/{id}', [\App\Http\Controllers\Api\ContactCategoryController::class, 'destroy']);
+    Route::post('/contact-categories/{id}/sync', [\App\Http\Controllers\Api\ContactCategoryController::class, 'syncContacts']);
+
     // Dashboard Stats & Activity Feed
     Route::get('/dashboard/stats', [DashboardController::class, 'getStats']);
     Route::get('/dashboard/feed', [DashboardController::class, 'getActivityFeed']);
@@ -123,4 +138,22 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/admin/users', [AdminController::class, 'storeUser']);
     Route::put('/admin/users/{id}', [AdminController::class, 'updateUser']);
     Route::delete('/admin/users/{id}', [AdminController::class, 'deleteUser']);
+
+    // Admin Tenant Contact Categories
+    Route::get('/admin/tenants/{tenantId}/contact-categories', [AdminController::class, 'listTenantContactCategories']);
+    Route::post('/admin/tenants/{tenantId}/contact-categories', [AdminController::class, 'storeTenantContactCategory']);
+    Route::put('/admin/contact-categories/{id}', [AdminController::class, 'updateTenantContactCategory']);
+    Route::delete('/admin/contact-categories/{id}', [AdminController::class, 'deleteTenantContactCategory']);
+    Route::post('/admin/contact-categories/{id}/sync', [AdminController::class, 'syncTenantContactCategoryContacts']);
+
+    // Admin Tenant Contacts
+    Route::get('/admin/tenants/{tenantId}/contacts', [AdminController::class, 'listTenantContacts']);
+    Route::post('/admin/tenants/{tenantId}/contacts', [AdminController::class, 'storeTenantContact']);
+    Route::put('/admin/contacts/{id}', [AdminController::class, 'updateTenantContact']);
+    Route::delete('/admin/contacts/{id}', [AdminController::class, 'deleteTenantContact']);
+
+    // Admin Tenant Templates
+    Route::get('/admin/tenants/{tenantId}/templates', [AdminController::class, 'listTenantTemplates']);
+    Route::delete('/admin/templates/{id}', [AdminController::class, 'deleteTenantTemplate']);
+    Route::post('/admin/tenants/{tenantId}/templates/sync', [AdminController::class, 'syncTenantTemplates']);
 });

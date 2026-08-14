@@ -17,12 +17,26 @@ class NotificationController extends Controller
         $query = Notification::orderBy('created_at', 'desc');
 
         if ($user->isAgent()) {
-            $query->whereIn('conversation_id', function ($subQuery) use ($user) {
+            $tenant = $user->tenant;
+            $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+
+            $query->whereIn('conversation_id', function ($subQuery) use ($user, $isDelivery) {
                 $subQuery->select('id')
                     ->from('conversations')
-                    ->where(function ($q) use ($user) {
+                    ->where(function ($q) use ($user, $isDelivery) {
                         $q->where('assigned_to', $user->id)
                           ->orWhereNull('assigned_to');
+
+                        if ($isDelivery) {
+                            $driverPhones = \App\Models\Driver::pluck('phone_number')->toArray();
+                            if (!empty($driverPhones)) {
+                                $q->orWhereIn('contact_id', function ($cq) use ($driverPhones) {
+                                    $cq->select('id')
+                                        ->from('contacts')
+                                        ->whereIn('phone_number', $driverPhones);
+                                });
+                            }
+                        }
                     });
             });
         }

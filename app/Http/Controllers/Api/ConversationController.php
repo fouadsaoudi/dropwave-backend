@@ -30,16 +30,22 @@ class ConversationController extends Controller
      */
     public function index(ListConversationsRequest $request)
     {
-        $query = Conversation::with(['contact', 'assignee', 'channel']);
-
         $user = $request->user();
         $tenant = $user->tenant;
         $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriverRequest = $request->has('drivers') && ($request->drivers === 'true' || $request->drivers === true || $request->drivers === 1 || $request->drivers === '1');
+
+        $relations = ['contact', 'assignee', 'channel'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+
+        $query = Conversation::with($relations);
 
         if ($isDelivery) {
             $driverPhones = \App\Models\Driver::pluck('phone_number')->toArray();
             
-            if ($request->has('drivers') && ($request->drivers === 'true' || $request->drivers === true || $request->drivers === 1 || $request->drivers === '1')) {
+            if ($isDriverRequest) {
                 $query->whereHas('contact', function ($q) use ($driverPhones) {
                     $q->whereIn('phone_number', $driverPhones);
                 });
@@ -59,36 +65,53 @@ class ConversationController extends Controller
         }
 
         if ($user->isAgent()) {
-            $query->where(function ($q) use ($user) {
-                $q->where('assigned_to', $user->id)
-                  ->orWhereNull('assigned_to');
-            });
+            if (!$isDriverRequest) {
+                $query->where(function ($q) use ($user) {
+                    $q->where('assigned_to', $user->id)
+                      ->orWhereNull('assigned_to');
+                });
 
-            if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
-                $query->whereNull('assigned_to');
-            } elseif ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
-                $query->where('assigned_to', $user->id);
+                if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
+                    $query->whereNull('assigned_to');
+                } elseif ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
+                    $query->where('assigned_to', $user->id);
+                }
             }
         } else {
-            // Filter by assigned agent
-            if ($request->has('assigned_to')) {
-                $query->where('assigned_to', $request->assigned_to);
-            }
+            if (!$isDriverRequest) {
+                // Filter by assigned agent
+                if ($request->has('assigned_to')) {
+                    $query->where('assigned_to', $request->assigned_to);
+                }
 
-            // Filter by unassigned (unclaimed) chats
-            if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
-                $query->whereNull('assigned_to');
-            }
+                // Filter by unassigned (unclaimed) chats
+                if ($request->has('unassigned') && ($request->unassigned === 'true' || $request->unassigned === true || $request->unassigned === 1 || $request->unassigned === '1')) {
+                    $query->whereNull('assigned_to');
+                }
 
-            // Filter by assigned chats
-            if ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
-                $query->whereNotNull('assigned_to');
+                // Filter by assigned chats
+                if ($request->has('assigned') && ($request->assigned === 'true' || $request->assigned === true || $request->assigned === 1 || $request->assigned === '1')) {
+                    $query->whereNotNull('assigned_to');
+                }
             }
         }
 
         $conversations = $query->orderBy('last_message_at', 'desc')->get();
 
         return response()->json($conversations);
+    }
+
+    /**
+     * Check if a conversation is with a delivery driver.
+     */
+    private function isDriverConversation(?Conversation $conversation, bool $isDelivery): bool
+    {
+        if (!$conversation || !$isDelivery || !$conversation->contact) {
+            return false;
+        }
+
+        $driverPhones = \App\Models\Driver::pluck('phone_number')->toArray();
+        return in_array($conversation->contact->phone_number, $driverPhones, true);
     }
 
     /**
@@ -141,7 +164,16 @@ class ConversationController extends Controller
      */
     public function messages(Request $request, $id)
     {
-        $conversation = Conversation::with(['contact', 'channel', 'assignee'])->find($id);
+        $user = $request->user();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+
+        $conversation = Conversation::with($relations)->find($id);
 
         if (!$conversation) {
             return response()->json([
@@ -151,7 +183,9 @@ class ConversationController extends Controller
         }
 
         $user = $request->user();
-        if ($user->isAgent() && $conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
+
+        if ($user->isAgent() && !$isDriver && $conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
             return response()->json([
                 'error' => 'forbidden',
                 'message' => 'Unauthorized access to this conversation.'
@@ -200,7 +234,11 @@ class ConversationController extends Controller
         }
 
         $user = $request->user();
-        if ($user->isAgent() && $conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
+
+        if ($user->isAgent() && !$isDriver && $conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
             return response()->json([
                 'error' => 'forbidden',
                 'message' => 'Unauthorized access to this conversation.'
@@ -213,8 +251,12 @@ class ConversationController extends Controller
             'status' => 'open'
         ]);
 
-        $conversation->load(['contact', 'channel', 'assignee']);
-        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
+        broadcast(new \App\Events\ConversationUpdated($conversation));
 
         return response()->json([
             'message' => 'Conversation claimed successfully.',
@@ -237,7 +279,11 @@ class ConversationController extends Controller
         }
 
         $user = $request->user();
-        if ($user->isAgent() && $conversation->assigned_to !== $user->id) {
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
+
+        if ($user->isAgent() && !$isDriver && $conversation->assigned_to !== $user->id) {
             return response()->json([
                 'error' => 'forbidden',
                 'message' => 'Unauthorized access to this conversation.'
@@ -250,8 +296,12 @@ class ConversationController extends Controller
             'resolved_at' => now()
         ]);
 
-        $conversation->load(['contact', 'channel', 'assignee']);
-        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
+        broadcast(new \App\Events\ConversationUpdated($conversation));
 
         return response()->json([
             'message' => 'Conversation resolved successfully.',
@@ -274,7 +324,11 @@ class ConversationController extends Controller
         }
 
         $user = $request->user();
-        if ($user->isAgent() && $conversation->assigned_to !== $user->id) {
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
+
+        if ($user->isAgent() && !$isDriver && $conversation->assigned_to !== $user->id) {
             return response()->json([
                 'error' => 'forbidden',
                 'message' => 'Unauthorized access to this conversation.'
@@ -287,8 +341,12 @@ class ConversationController extends Controller
             'resolved_at' => null
         ]);
 
-        $conversation->load(['contact', 'channel', 'assignee']);
-        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
+        broadcast(new \App\Events\ConversationUpdated($conversation));
 
         return response()->json([
             'message' => 'Conversation reopened successfully.',
@@ -311,12 +369,15 @@ class ConversationController extends Controller
         }
 
         $user = $request->user();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
         $isInternal = filter_var($request->input('is_internal'), FILTER_VALIDATE_BOOLEAN);
 
         // Check permissions
         $isManagerOrAdmin = $user->isManager() || $user->isAdmin();
         if (!$isManagerOrAdmin) {
-            if ($user->isAgent()) {
+            if ($user->isAgent() && !$isDriver) {
                 if (!$isInternal) {
                     // External message: agents must own the conversation
                     if ($conversation->assigned_to !== $user->id) {
@@ -342,6 +403,14 @@ class ConversationController extends Controller
             return response()->json([
                 'error' => 'policy_violation',
                 'message' => 'The WhatsApp 24-hour customer service window has expired. You can only send pre-approved template messages to this contact.'
+            ], 422);
+        }
+
+        // 1.b. Validate that the recipient hasn't opted out or blocked the business
+        if (!$isInternal && \App\Models\OptOut::where('tenant_id', $conversation->tenant_id)->where('phone_number', $conversation->contact->phone_number)->exists()) {
+            return response()->json([
+                'error' => 'opt_out_blocked',
+                'message' => 'Message blocked: This recipient has opted out or blocked your number.'
             ], 422);
         }
 
@@ -566,8 +635,8 @@ class ConversationController extends Controller
             $message->load('sender');
 
             // 5. Broadcast message & conversation updates
-            broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
-            broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+            broadcast(new \App\Events\MessageBroadcasted($message));
+            broadcast(new \App\Events\ConversationUpdated($conversation));
 
             return response()->json($message);
 
@@ -627,8 +696,14 @@ class ConversationController extends Controller
             'assigned_at' => $assignedTo ? now() : null,
         ]);
 
-        $conversation->load(['contact', 'channel', 'assignee']);
-        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
+        broadcast(new \App\Events\ConversationUpdated($conversation));
 
         // Create a system log message as an internal note
         $assigneeName = $conversation->assignee ? $conversation->assignee->name : 'Unassigned';
@@ -645,7 +720,7 @@ class ConversationController extends Controller
         ]);
 
         $message->load('sender');
-        broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
+        broadcast(new \App\Events\MessageBroadcasted($message));
 
         return response()->json([
             'message' => 'Conversation assigned successfully.',
@@ -704,8 +779,15 @@ class ConversationController extends Controller
             ->where('is_read', false)
             ->update(['is_read' => true]);
 
-        $conversation->load(['contact', 'channel', 'assignee']);
-        broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+        $user = $request->user();
+        $tenant = $user ? $user->tenant : $conversation->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
+        broadcast(new \App\Events\ConversationUpdated($conversation));
 
         return response()->json([
             'message' => 'Conversation marked as read.',
@@ -811,6 +893,14 @@ class ConversationController extends Controller
             ];
         }
 
+        // Validate that the recipient hasn't opted out or blocked the business
+        if (\App\Models\OptOut::where('tenant_id', $tenantId)->where('phone_number', $contact->phone_number)->exists()) {
+            return response()->json([
+                'error' => 'opt_out_blocked',
+                'message' => 'Message blocked: This recipient has opted out or blocked your number.'
+            ], 422);
+        }
+
         try {
             $langCode = $template->language;
             
@@ -858,8 +948,8 @@ class ConversationController extends Controller
 
             // 4. Broadcast live socket events
             $conversation->load(['contact', 'channel', 'assignee']);
-            broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
-            broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+            broadcast(new \App\Events\MessageBroadcasted($message));
+            broadcast(new \App\Events\ConversationUpdated($conversation));
 
             return response()->json([
                 'message' => 'Template message sent successfully.',
@@ -890,11 +980,14 @@ class ConversationController extends Controller
         }
 
         $user = $request->user();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
 
         // Check permissions
         $isManagerOrAdmin = $user->isManager() || $user->isAdmin();
         if (!$isManagerOrAdmin) {
-            if ($user->isAgent()) {
+            if ($user->isAgent() && !$isDriver) {
                 if ($conversation->assigned_to !== $user->id) {
                     return response()->json([
                         'error' => 'forbidden',
@@ -909,6 +1002,14 @@ class ConversationController extends Controller
             return response()->json([
                 'error' => 'policy_violation',
                 'message' => 'The WhatsApp 24-hour customer service window has expired. You can only send pre-approved template messages to this contact.'
+            ], 422);
+        }
+
+        // Validate that the recipient hasn't opted out or blocked the business
+        if (\App\Models\OptOut::where('tenant_id', $conversation->tenant_id)->where('phone_number', $conversation->contact->phone_number)->exists()) {
+            return response()->json([
+                'error' => 'opt_out_blocked',
+                'message' => 'Message blocked: This recipient has opted out or blocked your number.'
             ], 422);
         }
 
@@ -955,8 +1056,8 @@ class ConversationController extends Controller
 
             // 5. Broadcast live socket events
             $conversation->load(['contact', 'channel', 'assignee']);
-            broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
-            broadcast(new \App\Events\ConversationUpdated($conversation))->toOthers();
+            broadcast(new \App\Events\MessageBroadcasted($message));
+            broadcast(new \App\Events\ConversationUpdated($conversation));
 
             return response()->json($message);
 

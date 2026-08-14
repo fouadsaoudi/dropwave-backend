@@ -191,8 +191,8 @@ class OrderController extends Controller
 
                 // Broadcast Reverb updates for driver's chat
                 $message->load('sender');
-                broadcast(new \App\Events\MessageBroadcasted($message))->toOthers();
-                broadcast(new \App\Events\ConversationUpdated($driverConversation))->toOthers();
+                broadcast(new \App\Events\MessageBroadcasted($message));
+                broadcast(new \App\Events\ConversationUpdated($driverConversation));
 
                 return response()->json([
                     'message' => 'Order created and details sent to driver successfully.',

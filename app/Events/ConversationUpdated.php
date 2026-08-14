@@ -21,8 +21,12 @@ class ConversationUpdated implements ShouldBroadcastNow
      */
     public function __construct(Conversation $conversation)
     {
-        // Load contact information to make sure frontend has access to it for listing
-        $conversation->load('contact');
+        $isDelivery = $conversation->tenant && $conversation->tenant->type === 'delivery_coordination';
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
         $this->conversation = $conversation;
     }
 

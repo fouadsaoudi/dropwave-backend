@@ -420,16 +420,93 @@ class ProcessWebhookJob implements ShouldQueue
         } elseif ($newStatus === 'failed') {
             $errors = $status['errors'][0] ?? null;
             if ($errors) {
-                $updateData['error_code'] = $errors['code'] ?? null;
+                $errorCode = $errors['code'] ?? null;
+                $updateData['error_code'] = $errorCode;
                 $updateData['error_message'] = data_get($errors, 'error_data.details')
                     ?? $errors['message']
                     ?? null;
+
+                // Handle auto-opt out for block errors (131051 or 131026)
+                if (in_array((int)$errorCode, [131051, 131026])) {
+                    $conversation = $message->conversation;
+                    if ($conversation) {
+                        $contact = $conversation->contact;
+                        if ($contact) {
+                            \App\Models\OptOut::updateOrCreate([
+                                'tenant_id' => $message->tenant_id,
+                                'phone_number' => $contact->phone_number,
+                            ], [
+                                'opted_out_at' => now(),
+                                'source' => 'blocked',
+                            ]);
+                            Log::info("Number {$contact->phone_number} automatically added to opt_outs due to block error {$errorCode}.");
+                        }
+                    }
+                }
             }
         }
 
         if (!empty($updateData)) {
             $message->update($updateData);
             broadcast(new \App\Events\MessageBroadcasted($message));
+        }
+
+        // Update associated CampaignRecipient and Campaign stats if it exists
+        $campaignRecipient = \App\Models\CampaignRecipient::where('whatsapp_msg_id', $msgId)->first();
+        if ($campaignRecipient) {
+            $recipientUpdate = [];
+            
+            // Only update recipient status if the new status is failed, or is further in progression
+            $statusWeights = [
+                'pending' => 0,
+                'sending' => 1,
+                'sent' => 2,
+                'delivered' => 3,
+                'read' => 4,
+                'failed' => 5,
+                'blocked' => 6,
+            ];
+            
+            $currWeight = $statusWeights[$campaignRecipient->status] ?? 0;
+            $newWeight = $statusWeights[$newStatus] ?? 0;
+            
+            $shouldUpdateRecipient = ($newStatus === 'failed' || $newWeight > $currWeight);
+            
+            if ($shouldUpdateRecipient) {
+                $recipientUpdate['status'] = $newStatus;
+                
+                if ($newStatus === 'sent') {
+                    $recipientUpdate['sent_at'] = $timestamp;
+                } elseif ($newStatus === 'delivered') {
+                    $recipientUpdate['delivered_at'] = $timestamp;
+                } elseif ($newStatus === 'read') {
+                    $recipientUpdate['read_at'] = $timestamp;
+                } elseif ($newStatus === 'failed') {
+                    $errors = $status['errors'][0] ?? null;
+                    if ($errors) {
+                        $errorCode = $errors['code'] ?? null;
+                        $recipientUpdate['error_code'] = $errorCode;
+                        $recipientUpdate['error_message'] = data_get($errors, 'error_data.details') ?? $errors['message'] ?? null;
+                        if (in_array((int)$errorCode, [131051, 131026])) {
+                            $recipientUpdate['status'] = 'blocked';
+                        }
+                    }
+                }
+                
+                $campaignRecipient->update($recipientUpdate);
+                
+                // Recalculate campaign statistics
+                $campaign = $campaignRecipient->campaign;
+                if ($campaign) {
+                    $campaign->update([
+                        'sent_count' => $campaign->recipients()->whereIn('status', ['sent', 'delivered', 'read'])->count(),
+                        'delivered_count' => $campaign->recipients()->whereIn('status', ['delivered', 'read'])->count(),
+                        'read_count' => $campaign->recipients()->where('status', 'read')->count(),
+                        'failed_count' => $campaign->recipients()->where('status', 'failed')->count(),
+                        'blocked_count' => $campaign->recipients()->where('status', 'blocked')->count(),
+                    ]);
+                }
+            }
         }
     }
 

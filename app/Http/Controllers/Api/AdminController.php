@@ -1000,4 +1000,410 @@ class AdminController extends Controller
             'messages' => $items,
         ]);
     }
+
+    /**
+     * List contact categories for a tenant (Admin only).
+     */
+    public function listTenantContactCategories(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $categories = \App\Models\ContactCategory::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->with('contacts:id')
+            ->withCount('contacts')
+            ->orderBy('name')
+            ->get();
+
+        return response()->json($categories);
+    }
+
+    /**
+     * Store a new contact category for a tenant (Admin only).
+     */
+    public function storeTenantContactCategory(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+        ]);
+
+        $category = \App\Models\ContactCategory::create([
+            'tenant_id' => $tenantId,
+            'name' => $request->name,
+            'description' => $request->description,
+        ]);
+
+        return response()->json($category, 201);
+    }
+
+    /**
+     * Update an existing contact category (Admin only).
+     */
+    public function updateTenantContactCategory(Request $request, $id)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $category = \App\Models\ContactCategory::withoutGlobalScopes()->findOrFail($id);
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+        ]);
+
+        $category->update([
+            'name' => $request->name,
+            'description' => $request->description,
+        ]);
+
+        return response()->json($category);
+    }
+
+    /**
+     * Delete a contact category (Admin only).
+     */
+    public function deleteTenantContactCategory($id)
+    {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
+        $category = \App\Models\ContactCategory::withoutGlobalScopes()->findOrFail($id);
+        $category->delete();
+
+        return response()->json(['message' => 'Category deleted successfully.']);
+    }
+
+    /**
+     * Sync contacts mapped to this category (Admin only).
+     */
+    public function syncTenantContactCategoryContacts(Request $request, $id)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $category = \App\Models\ContactCategory::withoutGlobalScopes()->findOrFail($id);
+        
+        $request->validate([
+            'contact_ids' => 'present|array',
+            'contact_ids.*' => 'integer',
+        ]);
+
+        // Verify that all contacts exist and belong to the same tenant as the category
+        $invalidCount = \App\Models\Contact::withoutGlobalScopes()
+            ->whereIn('id', $request->contact_ids)
+            ->where('tenant_id', '!=', $category->tenant_id)
+            ->count();
+
+        if ($invalidCount > 0) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Some contacts belong to a different tenant.'
+            ], 403);
+        }
+
+        $category->contacts()->sync($request->contact_ids);
+
+        return response()->json([
+            'message' => 'Category contacts synchronized successfully.',
+            'contacts_count' => $category->contacts()->count(),
+        ]);
+    }
+
+    /**
+     * List contacts for a tenant (Admin only).
+     */
+    public function listTenantContacts(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $query = \App\Models\Contact::withoutGlobalScopes()->where('tenant_id', $tenantId);
+
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('phone_number', 'like', "%{$search}%");
+            });
+        }
+
+        $contacts = $query->orderBy('name', 'asc')->paginate(15);
+
+        return response()->json($contacts);
+    }
+
+    /**
+     * Store a new contact for a tenant (Admin only).
+     */
+    public function storeTenantContact(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'phone_number' => [
+                'required',
+                'string',
+                'max:30',
+                'regex:/^\+?[1-9]\d{1,14}$/', 
+                \Illuminate\Validation\Rule::unique('contacts')->where(function ($query) use ($tenantId) {
+                    return $query->where('tenant_id', $tenantId);
+                }),
+            ],
+        ], [
+            'phone_number.regex' => 'The phone number format must be E.164 (e.g. +96171000000).',
+            'phone_number.unique' => 'A contact with this phone number already exists in this workspace.',
+        ]);
+
+        $contact = \App\Models\Contact::create([
+            'tenant_id' => $tenantId,
+            'name' => $request->name,
+            'phone_number' => $request->phone_number,
+            'added_via' => 'manual',
+        ]);
+
+        return response()->json([
+            'message' => 'Contact created successfully.',
+            'contact' => $contact
+        ], 201);
+    }
+
+    /**
+     * Update contact (Admin only).
+     */
+    public function updateTenantContact(Request $request, $id)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $contact = \App\Models\Contact::withoutGlobalScopes()->find($id);
+
+        if (!$contact) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Contact not found.'
+            ], 404);
+        }
+
+        $tenantId = $contact->tenant_id;
+
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'phone_number' => [
+                'required',
+                'string',
+                'max:30',
+                'regex:/^\+?[1-9]\d{1,14}$/', 
+                \Illuminate\Validation\Rule::unique('contacts')->ignore($id)->where(function ($query) use ($tenantId) {
+                    return $query->where('tenant_id', $tenantId);
+                }),
+            ],
+        ], [
+            'phone_number.regex' => 'The phone number format must be E.164 (e.g. +96171000000).',
+            'phone_number.unique' => 'A contact with this phone number already exists in this workspace.',
+        ]);
+
+        $contact->update($request->only(['name', 'phone_number']));
+
+        return response()->json([
+            'message' => 'Contact updated successfully.',
+            'contact' => $contact
+        ]);
+    }
+
+    /**
+     * Delete contact (Admin only).
+     */
+    public function deleteTenantContact($id)
+    {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
+        $contact = \App\Models\Contact::withoutGlobalScopes()->find($id);
+
+        if (!$contact) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Contact not found.'
+            ], 404);
+        }
+
+        $contact->delete();
+
+        return response()->json([
+            'message' => 'Contact deleted successfully.'
+        ]);
+    }
+
+    /**
+     * List message templates for a tenant (Admin only).
+     */
+    public function listTenantTemplates(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $templates = \App\Models\MessageTemplate::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->with('channel')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json($templates);
+    }
+
+    /**
+     * Delete a template (Admin only).
+     */
+    public function deleteTenantTemplate($id)
+    {
+        if ($response = $this->requireAdmin(request())) {
+            return $response;
+        }
+
+        $template = \App\Models\MessageTemplate::withoutGlobalScopes()->find($id);
+
+        if (!$template) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Template not found.'
+            ], 404);
+        }
+
+        $channel = WabaChannel::withoutGlobalScopes()->find($template->channel_id);
+
+        if ($channel && $channel->decrypted_token && $channel->waba_id) {
+            try {
+                $metaService = resolve(\App\Services\MetaApiService::class);
+                $metaService->deleteMessageTemplate(
+                    $channel->decrypted_token,
+                    $channel->waba_id,
+                    $template->name
+                );
+            } catch (\Exception $e) {
+                // Log failure or handle missing Meta template
+            }
+        }
+
+        $template->delete();
+
+        return response()->json([
+            'message' => 'Template deleted successfully.'
+        ]);
+    }
+
+    /**
+     * Sync templates for a tenant specifically (Admin only).
+     */
+    public function syncTenantTemplates(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $channel = WabaChannel::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('is_active', true)
+            ->first();
+
+        if (!$channel || !$channel->decrypted_token || !$channel->waba_id) {
+            return response()->json([
+                'error' => 'no_channel',
+                'message' => 'No active WhatsApp channel found to sync templates.'
+            ], 400);
+        }
+
+        try {
+            $metaService = resolve(\App\Services\MetaApiService::class);
+            $metaData = $metaService->fetchMessageTemplates(
+                $channel->decrypted_token,
+                $channel->waba_id
+            );
+
+            $syncedCount = 0;
+
+            foreach ($metaData['data'] ?? [] as $metaTpl) {
+                $bodyText = '';
+                $headerType = 'none';
+                $headerContent = null;
+                $footerText = null;
+
+                foreach ($metaTpl['components'] ?? [] as $comp) {
+                    if ($comp['type'] === 'BODY') {
+                        $bodyText = $comp['text'] ?? '';
+                    } elseif ($comp['type'] === 'HEADER') {
+                        $headerType = strtolower($comp['format'] ?? 'none');
+                        $headerContent = $comp['text'] ?? null;
+                    } elseif ($comp['type'] === 'FOOTER') {
+                        $footerText = $comp['text'] ?? null;
+                    }
+                }
+
+                preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
+                $variables = array_map('intval', array_unique($matches[1] ?? []));
+                sort($variables);
+
+                $status = strtoupper($metaTpl['status'] ?? 'PENDING');
+                $lang = $metaTpl['language'];
+
+                $tplData = [
+                    'meta_template_id' => $metaTpl['id'] ?? null,
+                    'status' => $status,
+                    'category' => $metaTpl['category'] ?? 'UTILITY',
+                    'billing_cost' => \App\Models\MessageTemplate::defaultBillingCostForCategory($metaTpl['category'] ?? 'UTILITY'),
+                    'language' => $lang,
+                    'header_type' => $headerType,
+                    'header_content' => $headerContent,
+                    'body' => $bodyText,
+                    'footer' => $footerText,
+                    'variables' => $variables,
+                    'rejection_reason' => $metaTpl['rejected_reason'] ?? null,
+                    'approved_at' => $status === 'APPROVED' ? now() : null,
+                ];
+
+                $localTpl = \App\Models\MessageTemplate::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('name', $metaTpl['name'])
+                    ->first();
+
+                if ($localTpl) {
+                    $localTpl->update($tplData);
+                } else {
+                    \App\Models\MessageTemplate::create(array_merge($tplData, [
+                        'tenant_id' => $channel->tenant_id,
+                        'channel_id' => $channel->id,
+                        'name' => $metaTpl['name'],
+                    ]));
+                }
+                $syncedCount++;
+            }
+
+            return response()->json([
+                'message' => "Successfully synced {$syncedCount} templates with Meta API.",
+                'synced_count' => $syncedCount
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'sync_failed',
+                'message' => 'Failed to sync templates with Meta: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

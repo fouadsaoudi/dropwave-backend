@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Services\WhatsAppErrorService;
 use Exception;
 
 class MetaApiService
@@ -126,11 +127,9 @@ class MetaApiService
         ]);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp text message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp text message to {$to}", [
+                'phone_number_id' => $phoneNumberId,
             ]);
-            throw new Exception('Meta API send text message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -163,11 +162,11 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp template message {$templateName} via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp template message '{$templateName}' to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'template' => $templateName,
+                'language' => $language,
             ]);
-            throw new Exception('Meta API send template message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -250,11 +249,10 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to submit WhatsApp message template to WABA {$wabaId}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Submit WhatsApp message template to WABA {$wabaId}", [
+                'waba_id' => $wabaId,
+                'name' => $payload['name'] ?? null,
             ]);
-            throw new Exception('Meta API template submission failed: ' . $response->body());
         }
 
         return $response->json();
@@ -272,11 +270,9 @@ class MetaApiService
         ]);
 
         if ($response->failed()) {
-            Log::error("Failed to fetch WhatsApp message templates for WABA {$wabaId}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Fetch WhatsApp message templates for WABA {$wabaId}", [
+                'waba_id' => $wabaId,
             ]);
-            throw new Exception('Meta API fetch templates failed: ' . $response->body());
         }
 
         return $response->json();
@@ -294,11 +290,10 @@ class MetaApiService
         ]);
 
         if ($response->failed()) {
-            Log::error("Failed to delete WhatsApp message template {$templateName} from WABA {$wabaId}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Delete WhatsApp message template '{$templateName}' from WABA {$wabaId}", [
+                'waba_id' => $wabaId,
+                'template_name' => $templateName,
             ]);
-            throw new Exception('Meta API template deletion failed: ' . $response->body());
         }
 
         return $response->json();
@@ -326,11 +321,11 @@ class MetaApiService
             ]);
 
         if ($response->failed()) {
-            Log::error("Failed to upload media via {$phoneNumberId}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Upload media via {$phoneNumberId}", [
+                'phone_number_id' => $phoneNumberId,
+                'file' => basename($filePath),
+                'mime_type' => $uploadMimeType,
             ]);
-            throw new Exception('Meta API media upload failed: ' . $response->body());
         }
 
         return $response->json();
@@ -360,11 +355,10 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp image message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp image message via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'media_id' => $mediaId,
             ]);
-            throw new Exception('Meta API send image message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -395,11 +389,11 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp document message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp document message via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'media_id' => $mediaId,
+                'filename' => $filename,
             ]);
-            throw new Exception('Meta API send document message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -429,11 +423,10 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp video message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp video message via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'media_id' => $mediaId,
             ]);
-            throw new Exception('Meta API send video message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -465,11 +458,11 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp audio message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp audio message via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'media_id' => $mediaId,
+                'is_voice_message' => $isVoiceMessage,
             ]);
-            throw new Exception('Meta API send audio message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -495,11 +488,10 @@ class MetaApiService
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp sticker message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp sticker message via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'media_id' => $mediaId,
             ]);
-            throw new Exception('Meta API send sticker message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -529,11 +521,9 @@ class MetaApiService
         ]);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp location request via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp location request via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
             ]);
-            throw new Exception('Meta API send location request failed: ' . $response->body());
         }
 
         return $response->json();
@@ -567,11 +557,11 @@ class MetaApiService
         ]);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp CTA URL message via {$phoneNumberId} to {$to}", [
-                'response' => $response->json(),
-                'status' => $response->status(),
+            $this->handleFailedResponse($response, "Send WhatsApp CTA URL message via {$phoneNumberId} to {$to}", [
+                'phone_number_id' => $phoneNumberId,
+                'button_text' => $buttonText,
+                'target_url' => $url,
             ]);
-            throw new Exception('Meta API send CTA URL message failed: ' . $response->body());
         }
 
         return $response->json();
@@ -597,16 +587,32 @@ class MetaApiService
         ]);
 
         if ($response->failed()) {
-            Log::error("Failed to send WhatsApp reaction via {$phoneNumberId} to {$to}", [
+            $this->handleFailedResponse($response, "Send WhatsApp reaction to {$to}", [
                 'target_message_id' => $targetWhatsappMsgId,
                 'emoji' => $emoji,
-                'response' => $response->json(),
-                'status' => $response->status(),
+                'phone_number_id' => $phoneNumberId,
             ]);
-            throw new Exception('Meta API send reaction failed: ' . $response->body());
         }
 
         return $response->json();
+    }
+
+    /**
+     * Handle, log, and throw an enriched exception for failed Meta API responses.
+     */
+    protected function handleFailedResponse($response, string $actionDescription, array $extraContext = []): void
+    {
+        WhatsAppErrorService::logError($response, array_merge([
+            'action' => $actionDescription,
+            'status' => $response->status(),
+        ], $extraContext));
+
+        $formattedMsg = WhatsAppErrorService::formatErrorMessage(
+            $response,
+            "{$actionDescription} failed (HTTP {$response->status()})"
+        );
+
+        throw new Exception($formattedMsg);
     }
 }
 

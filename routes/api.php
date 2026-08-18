@@ -35,6 +35,8 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/channels/manual', [ChannelController::class, 'connectManual']);
     Route::post('/channels/{id}/override-webhook', [ChannelController::class, 'overrideWebhook']);
     Route::post('/channels/{id}/toggle-calling', [ChannelController::class, 'toggleCalling']);
+    Route::get('/channels/{id}/settings', [ChannelController::class, 'getSettings']);
+    Route::post('/channels/{id}/settings', [ChannelController::class, 'updateSettings']);
 
     // Conversations
     Route::get('/conversations', [ConversationController::class, 'index']);
@@ -157,4 +159,8 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/admin/tenants/{tenantId}/templates', [AdminController::class, 'listTenantTemplates']);
     Route::delete('/admin/templates/{id}', [AdminController::class, 'deleteTenantTemplate']);
     Route::post('/admin/tenants/{tenantId}/templates/sync', [AdminController::class, 'syncTenantTemplates']);
+
+    // WhatsApp Error Codes Knowledge Base & Lookup
+    Route::get('/whatsapp-error-codes', [\App\Http\Controllers\Api\WhatsAppErrorCodeController::class, 'index']);
+    Route::get('/whatsapp-error-codes/{code}', [\App\Http\Controllers\Api\WhatsAppErrorCodeController::class, 'lookup']);
 });

@@ -576,5 +576,38 @@ class MetaApiService
 
         return $response->json();
     }
+
+    /**
+     * Send an emoji reaction to a WhatsApp message.
+     * Pass empty string "" for emoji to remove an existing reaction.
+     */
+    public function sendReactionMessage(string $accessToken, string $phoneNumberId, string $to, string $targetWhatsappMsgId, string $emoji = ''): array
+    {
+        $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
+
+        $response = Http::withToken($accessToken)->post($url, [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $to,
+            'type' => 'reaction',
+            'reaction' => [
+                'message_id' => $targetWhatsappMsgId,
+                'emoji' => $emoji,
+            ]
+        ]);
+
+        if ($response->failed()) {
+            Log::error("Failed to send WhatsApp reaction via {$phoneNumberId} to {$to}", [
+                'target_message_id' => $targetWhatsappMsgId,
+                'emoji' => $emoji,
+                'response' => $response->json(),
+                'status' => $response->status(),
+            ]);
+            throw new Exception('Meta API send reaction failed: ' . $response->body());
+        }
+
+        return $response->json();
+    }
 }
+
 

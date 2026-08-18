@@ -51,6 +51,10 @@ class MessageBroadcasted implements ShouldBroadcastNow
      */
     public function broadcastWith(): array
     {
+        if (!$this->message->relationLoaded('reactions')) {
+            $this->message->load('reactions.sender');
+        }
+
         $messageData = $this->message->toArray();
 
         $conversation = $this->message->conversation 

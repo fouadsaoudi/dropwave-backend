@@ -220,18 +220,31 @@ class AdminController extends Controller
         }
 
         $billingService = resolve(\App\Services\TenantBillingService::class);
-        $tenants = Tenant::withCount('channels')
-            ->get(['id', 'name', 'slug', 'contact_name', 'email', 'phone', 'type', 'is_active', 'created_at']);
+        $query = Tenant::withCount('channels');
+
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('slug', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%");
+            });
+        }
+
+        $perPage = (int) $request->input('per_page', 15);
+        $tenants = $query->orderBy('name', 'asc')->paginate($perPage);
 
         $billingMonthStr = $request->input('billing_month');
         $month = $billingMonthStr 
             ? \Carbon\Carbon::parse($billingMonthStr)->startOfMonth() 
             : \Carbon\Carbon::now()->startOfMonth();
 
-        foreach ($tenants as $tenant) {
+        $tenants->getCollection()->transform(function ($tenant) use ($billingService, $month) {
             $summary = $billingService->getMonthlySnapshotSummary($tenant, $month);
             $tenant->current_billing = $summary;
-        }
+            return $tenant;
+        });
 
         return response()->json($tenants);
     }
@@ -397,7 +410,16 @@ class AdminController extends Controller
             $query->where('tenant_id', $user->tenant_id);
         }
 
-        $users = $query->get(['id', 'tenant_id', 'role_id', 'name', 'email', 'is_active', 'created_at']);
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%");
+            });
+        }
+
+        $perPage = (int) $request->input('per_page', 15);
+        $users = $query->orderBy('name', 'asc')->paginate($perPage);
 
         return response()->json($users);
     }

@@ -45,6 +45,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/resolve', [ConversationController::class, 'resolve']);
     Route::post('/conversations/{id}/reopen', [ConversationController::class, 'reopen']);
     Route::post('/conversations/{id}/messages', [ConversationController::class, 'sendMessage']);
+    Route::post('/conversations/{id}/messages/{messageId}/reaction', [ConversationController::class, 'reactToMessage']);
     Route::post('/conversations/{id}/request-location', [ConversationController::class, 'requestLocation']);
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
     Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);

@@ -192,7 +192,9 @@ class ConversationController extends Controller
             ], 403);
         }
 
-        $query = Message::with('sender')->where('conversation_id', $id);
+        $query = Message::with(['sender', 'reactions.sender'])
+            ->where('conversation_id', $id)
+            ->where('type', '!=', 'reaction');
 
         if ($request->has('before_id')) {
             $query->where('id', '<', $request->before_id);
@@ -208,6 +210,7 @@ class ConversationController extends Controller
         if ($messages->isNotEmpty()) {
             $oldestId = $messages->first()->id;
             $hasMore = Message::where('conversation_id', $id)
+                ->where('type', '!=', 'reaction')
                 ->where('id', '<', $oldestId)
                 ->exists();
         }
@@ -1068,6 +1071,133 @@ class ConversationController extends Controller
 
             return response()->json([
                 'error' => 'failed_send',
+                'message' => $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * React to a specific message in a conversation with an emoji (or unreact if emoji is empty).
+     */
+    public function reactToMessage(Request $request, $id, $messageId)
+    {
+        $conversation = Conversation::with('channel', 'contact')->find($id);
+
+        if (!$conversation) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Conversation not found.'
+            ], 404);
+        }
+
+        $user = $request->user();
+        $tenant = $user->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
+
+        // Check permissions
+        $isManagerOrAdmin = $user->isManager() || $user->isAdmin();
+        if (!$isManagerOrAdmin) {
+            if ($user->isAgent() && !$isDriver) {
+                if ($conversation->assigned_to !== null && $conversation->assigned_to !== $user->id) {
+                    return response()->json([
+                        'error' => 'forbidden',
+                        'message' => 'Unauthorized to react to messages in another agent\'s conversation.'
+                    ], 403);
+                }
+            }
+        }
+
+        $targetMessage = Message::where('conversation_id', $conversation->id)->find($messageId);
+
+        if (!$targetMessage) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Target message not found.'
+            ], 404);
+        }
+
+        $request->validate([
+            'emoji' => 'nullable|string|max:10',
+        ]);
+
+        $emoji = trim((string)$request->input('emoji', ''));
+        $channel = $conversation->channel;
+        $contact = $conversation->contact;
+
+        try {
+            $whatsappReactionId = null;
+
+            // If message has WhatsApp Message ID and not an internal note, send reaction to Meta API
+            if (!$targetMessage->is_internal && $targetMessage->whatsapp_msg_id && $channel && $contact) {
+                $metaResponse = $this->metaService->sendReactionMessage(
+                    $channel->decrypted_token,
+                    $channel->phone_number_id,
+                    $contact->phone_number,
+                    $targetMessage->whatsapp_msg_id,
+                    $emoji
+                );
+
+                $whatsappReactionId = $metaResponse['messages'][0]['id'] ?? null;
+            }
+
+            // Find any existing outbound reaction by this user on this target message
+            $existingReaction = Message::where('conversation_id', $conversation->id)
+                ->where('type', 'reaction')
+                ->where('direction', 'outbound')
+                ->where('reaction_to_msg_id', $targetMessage->id)
+                ->where(function ($q) use ($user) {
+                    $q->where('sent_by', $user->id)->orWhereNull('sent_by');
+                })
+                ->first();
+
+            if (empty($emoji)) {
+                // Remove reaction
+                if ($existingReaction) {
+                    $existingReaction->delete();
+                }
+            } else {
+                if ($existingReaction) {
+                    $existingReaction->update([
+                        'reaction_emoji' => $emoji,
+                        'whatsapp_msg_id' => $whatsappReactionId ?: $existingReaction->whatsapp_msg_id,
+                        'sent_by' => $user->id,
+                        'status' => 'sent',
+                        'sent_at' => now(),
+                    ]);
+                } else {
+                    Message::create([
+                        'tenant_id' => $conversation->tenant_id,
+                        'conversation_id' => $conversation->id,
+                        'direction' => 'outbound',
+                        'type' => 'reaction',
+                        'reaction_emoji' => $emoji,
+                        'reaction_to_msg_id' => $targetMessage->id,
+                        'whatsapp_msg_id' => $whatsappReactionId,
+                        'status' => 'sent',
+                        'sent_by' => $user->id,
+                        'sent_at' => now(),
+                    ]);
+                }
+            }
+
+            // Reload target message with reactions and broadcast
+            $targetMessage->load(['sender', 'reactions.sender']);
+
+            broadcast(new \App\Events\MessageBroadcasted($targetMessage));
+
+            return response()->json([
+                'success' => true,
+                'message' => $targetMessage,
+            ]);
+
+        } catch (Exception $e) {
+            Log::error("Failed to send reaction to message {$messageId} in conversation {$id}: " . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'error' => 'failed_reaction',
                 'message' => $e->getMessage()
             ], 422);
         }

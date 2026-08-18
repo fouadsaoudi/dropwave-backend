@@ -225,6 +225,65 @@ class ProcessWebhookJob implements ShouldQueue
 
             // 3. Save Message
             $type = $msg['type'] ?? 'text';
+
+            // Handle WhatsApp reaction webhook
+            if ($type === 'reaction') {
+                $targetWaMsgId = $msg['reaction']['message_id'] ?? null;
+                $reactionEmoji = $msg['reaction']['emoji'] ?? '';
+
+                $targetMessage = $targetWaMsgId ? Message::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('whatsapp_msg_id', $targetWaMsgId)
+                    ->first() : null;
+
+                if (empty($reactionEmoji)) {
+                    // Reaction removed
+                    if ($targetMessage) {
+                        Message::withoutGlobalScopes()
+                            ->where('conversation_id', $conversation->id)
+                            ->where('type', 'reaction')
+                            ->where('direction', 'inbound')
+                            ->where('reaction_to_msg_id', $targetMessage->id)
+                            ->delete();
+                    }
+                } else {
+                    $existingReaction = $targetMessage ? Message::withoutGlobalScopes()
+                        ->where('conversation_id', $conversation->id)
+                        ->where('type', 'reaction')
+                        ->where('direction', 'inbound')
+                        ->where('reaction_to_msg_id', $targetMessage->id)
+                        ->first() : null;
+
+                    if ($existingReaction) {
+                        $existingReaction->update([
+                            'reaction_emoji' => $reactionEmoji,
+                            'whatsapp_msg_id' => $msgId,
+                            'status' => 'delivered',
+                            'sent_at' => $timestamp,
+                        ]);
+                    } else {
+                        Message::withoutGlobalScopes()->create([
+                            'tenant_id' => $channel->tenant_id,
+                            'conversation_id' => $conversation->id,
+                            'direction' => 'inbound',
+                            'type' => 'reaction',
+                            'reaction_emoji' => $reactionEmoji,
+                            'reaction_to_msg_id' => $targetMessage?->id,
+                            'whatsapp_msg_id' => $msgId,
+                            'status' => 'delivered',
+                            'sent_at' => $timestamp,
+                        ]);
+                    }
+                }
+
+                if ($targetMessage) {
+                    $targetMessage->load(['sender', 'reactions.sender']);
+                    broadcast(new \App\Events\MessageBroadcasted($targetMessage));
+                }
+                broadcast(new \App\Events\ConversationUpdated($conversation));
+                return;
+            }
+
             $body = $msg['text']['body'] ?? null;
             $lat = $msg['location']['latitude'] ?? null;
             $lng = $msg['location']['longitude'] ?? null;

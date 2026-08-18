@@ -14,10 +14,21 @@ class DriverController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
-        $drivers = Driver::orderBy('name')->get();
+        $query = Driver::query();
 
-        // Check availability status (online/offline via 24h WhatsApp window)
-        $drivers = $drivers->map(function ($driver) use ($user) {
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('phone_number', 'like', "%{$search}%");
+            });
+        }
+
+        $perPage = (int) $request->input('per_page', 15);
+        $paginated = $query->orderBy('name', 'asc')->paginate($perPage);
+
+        // Compute online availability status only for current page items
+        $paginated->getCollection()->transform(function ($driver) use ($user) {
             $isOnline = false;
             
             // Find contact matching driver's phone number
@@ -34,7 +45,7 @@ class DriverController extends Controller
             return $driver;
         });
 
-        return response()->json($drivers);
+        return response()->json($paginated);
     }
 
     public function store(Request $request)

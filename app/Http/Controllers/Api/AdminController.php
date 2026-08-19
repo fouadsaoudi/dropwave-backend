@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\MessageTemplate;
 use App\Models\Tenant;
 use App\Models\WabaChannel;
+use App\Models\TenantBillingSnapshot;
 use App\Models\User;
 use App\Models\Role;
 use App\Services\TenantBillingService;
@@ -102,38 +103,30 @@ class AdminController extends Controller
 
         $healthyChannelsCount = $channels->count() - $problematicChannels->count();
 
-        // Calculate billing overview totals
-        $billingService = resolve(\App\Services\TenantBillingService::class);
-        $tenants = Tenant::all();
-        $now = \Carbon\Carbon::now();
+        // Calculate billing overview totals directly from tenant_billing_snapshots for high performance
+        $now = Carbon::now();
+        $billingMonthStr = $now->copy()->startOfMonth()->toDateString();
         
-        $totalAgentBilling = 0;
-        $totalMetaBilling = 0;
-        $totalRealMetaBilling = 0;
-        $totalPaidRevenue = 0;
-        $totalUnpaidRevenue = 0;
-        $paidTenantsCount = 0;
-        $unpaidTenantsCount = 0;
-        
-        foreach ($tenants as $tenant) {
-            $summary = $billingService->getMonthlySnapshotSummary($tenant, $now);
-            $agentCost = (float) ($summary['total_estimated_cost'] ?? 0);
-            $metaCost = (float) ($summary['meta_total_estimated_cost'] ?? 0);
-            $realMetaCost = (float) ($summary['meta_template_cost_total'] ?? 0);
-            $status = $summary['payment_status'] ?? 'unpaid';
+        $billingTotals = TenantBillingSnapshot::withoutGlobalScopes()
+            ->whereDate('billing_month', $billingMonthStr)
+            ->selectRaw("
+                COALESCE(SUM(total_estimated_cost), 0) as total_agent_billing,
+                COALESCE(SUM(meta_total_estimated_cost), 0) as total_meta_billing,
+                COALESCE(SUM(meta_template_cost_total), 0) as total_real_meta_billing,
+                COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN amount_paid ELSE 0 END), 0) as total_paid_revenue,
+                COALESCE(SUM(CASE WHEN payment_status != 'paid' OR payment_status IS NULL THEN total_estimated_cost ELSE 0 END), 0) as total_unpaid_revenue,
+                COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END), 0) as paid_tenants_count,
+                COALESCE(SUM(CASE WHEN payment_status != 'paid' OR payment_status IS NULL THEN 1 ELSE 0 END), 0) as unpaid_tenants_count
+            ")
+            ->first();
 
-            $totalAgentBilling += $agentCost;
-            $totalMetaBilling += $metaCost;
-            $totalRealMetaBilling += $realMetaCost;
-
-            if ($status === 'paid') {
-                $totalPaidRevenue += (float) ($summary['amount_paid'] ?? $agentCost);
-                $paidTenantsCount++;
-            } else {
-                $totalUnpaidRevenue += $agentCost;
-                $unpaidTenantsCount++;
-            }
-        }
+        $totalAgentBilling = (float) ($billingTotals->total_agent_billing ?? 0);
+        $totalMetaBilling = (float) ($billingTotals->total_meta_billing ?? 0);
+        $totalRealMetaBilling = (float) ($billingTotals->total_real_meta_billing ?? 0);
+        $totalPaidRevenue = (float) ($billingTotals->total_paid_revenue ?? 0);
+        $totalUnpaidRevenue = (float) ($billingTotals->total_unpaid_revenue ?? 0);
+        $paidTenantsCount = (int) ($billingTotals->paid_tenants_count ?? 0);
+        $unpaidTenantsCount = (int) ($billingTotals->unpaid_tenants_count ?? 0);
         
         $totalProfit = $totalAgentBilling - $totalRealMetaBilling;
 

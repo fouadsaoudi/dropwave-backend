@@ -49,16 +49,18 @@ class AdminUserManagementTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonStructure([
-                '*' => [
-                    'id',
-                    'tenant_id',
-                    'role_id',
-                    'name',
-                    'email',
-                    'is_active',
-                    'created_at',
-                    'role',
-                    'tenant'
+                'data' => [
+                    '*' => [
+                        'id',
+                        'tenant_id',
+                        'role_id',
+                        'name',
+                        'email',
+                        'is_active',
+                        'created_at',
+                        'role',
+                        'tenant'
+                    ]
                 ]
             ]);
     }

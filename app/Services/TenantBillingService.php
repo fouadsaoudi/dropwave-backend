@@ -17,22 +17,26 @@ class TenantBillingService
     public const FREE_TIER_LIMIT = 0;
     public const BILLABLE_WINDOW_RATE = '0.015';
 
-    public function getMonthlySnapshotSummary(Tenant $tenant, Carbon $month): array
+    public function getMonthlySnapshotSummary(Tenant $tenant, Carbon $month, bool $forceFresh = false): array
     {
         $billingMonth = $month->copy()->startOfMonth();
 
         if (Schema::hasTable('tenant_billing_snapshots')) {
-            if ($billingMonth->isCurrentMonth()) {
+            if ($billingMonth->isCurrentMonth() && $forceFresh) {
                 return $this->snapshotToArray($this->syncMonthlySnapshot($tenant, $billingMonth));
             }
 
-            $snapshot = TenantBillingSnapshot::query()
+            $snapshot = TenantBillingSnapshot::withoutGlobalScopes()
                 ->where('tenant_id', $tenant->id)
                 ->whereDate('billing_month', $billingMonth->toDateString())
                 ->first();
 
             if ($snapshot) {
                 return $this->snapshotToArray($snapshot);
+            }
+
+            if ($billingMonth->isCurrentMonth()) {
+                return $this->snapshotToArray($this->syncMonthlySnapshot($tenant, $billingMonth));
             }
         }
 

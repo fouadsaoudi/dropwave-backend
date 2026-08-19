@@ -100,7 +100,8 @@ class AgentConversationRestrictionTest extends TestCase
             ]);
 
         $response->assertStatus(200);
-        $ids = collect($response->json())->pluck('id')->toArray();
+        $data = $response->json('data') ?? $response->json();
+        $ids = collect($data)->pluck('id')->toArray();
         $this->assertContains($conv1->id, $ids);
         $this->assertNotContains($conv2->id, $ids);
     }

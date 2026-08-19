@@ -82,7 +82,7 @@ class DriverConversationNameFallbackTest extends TestCase
             ->getJson('/api/conversations?status=open&assigned=true&drivers=true');
 
         $response->assertStatus(200);
-        $data = $response->json();
+        $data = $response->json('data') ?? $response->json();
         
         $this->assertNotEmpty($data);
         $this->assertEquals('Driver John Doe', $data[0]['contact']['name']);
@@ -146,7 +146,7 @@ class DriverConversationNameFallbackTest extends TestCase
             ->getJson('/api/conversations?status=open&assigned=true');
 
         $response->assertStatus(200);
-        $data = $response->json();
+        $data = $response->json('data') ?? $response->json();
         
         $this->assertNotEmpty($data);
         $this->assertNull($data[0]['contact']['name']);

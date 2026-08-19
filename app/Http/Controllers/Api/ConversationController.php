@@ -96,7 +96,18 @@ class ConversationController extends Controller
             }
         }
 
-        $conversations = $query->orderBy('last_message_at', 'desc')->get();
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->whereHas('contact', function ($cq) use ($search) {
+                    $cq->where('name', 'like', "%{$search}%")
+                       ->orWhere('phone_number', 'like', "%{$search}%");
+                })->orWhere('last_message_body', 'like', "%{$search}%");
+            });
+        }
+
+        $perPage = min(100, max(1, (int) $request->input('per_page', 50)));
+        $conversations = $query->orderBy('last_message_at', 'desc')->paginate($perPage);
 
         return response()->json($conversations);
     }

@@ -433,6 +433,27 @@ class ProcessWebhookJob implements ShouldQueue
             // Broadcast Echo/Reverb events
             broadcast(new \App\Events\MessageBroadcasted($message));
             broadcast(new \App\Events\ConversationUpdated($conversation));
+
+            // Dispatch FCM Push Notifications to active devices
+            try {
+                $pushTitle = $contact->name ?: ($contact->phone_number ?: 'New Message');
+                $pushBody = $lastMessageBody ?: 'Sent an attachment';
+                $pushData = [
+                    'type' => 'new_message',
+                    'conversation_id' => (string)$conversation->id,
+                    'message_id' => (string)$message->id,
+                    'contact_name' => (string)($contact->name ?? ''),
+                    'contact_phone' => (string)($contact->phone_number ?? ''),
+                ];
+
+                if ($conversation->assigned_to) {
+                    \App\Services\FcmNotificationService::sendToUser($conversation->assigned_to, $pushTitle, $pushBody, $pushData);
+                } else {
+                    \App\Services\FcmNotificationService::sendToTenantAgents($channel->tenant_id, $pushTitle, $pushBody, $pushData);
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('[FCM] Push dispatch error in webhook: ' . $e->getMessage());
+            }
         });
     }
 

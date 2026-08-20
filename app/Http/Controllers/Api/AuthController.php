@@ -104,22 +104,30 @@ class AuthController extends Controller
 
     /**
      * Register or update a user FCM token for mobile push notifications.
+     * Supports multiple devices per user and token renewal.
      */
     public function updateFcmToken(Request $request)
     {
         $request->validate([
             'fcm_token' => 'required|string',
+            'old_fcm_token' => 'nullable|string',
             'device_type' => 'nullable|string',
         ]);
 
         $user = $request->user();
 
+        // 1. If an old token was replaced on this device during token renewal, prune it
+        if ($request->filled('old_fcm_token') && $request->old_fcm_token !== $request->fcm_token) {
+            \App\Models\UserFcmToken::where('fcm_token', $request->old_fcm_token)->delete();
+        }
+
+        // 2. Register or update the token for this user
         $tokenRecord = \App\Models\UserFcmToken::updateOrCreate(
             [
-                'user_id' => $user->id,
                 'fcm_token' => $request->fcm_token,
             ],
             [
+                'user_id' => $user->id,
                 'device_type' => $request->device_type ?? 'mobile',
                 'last_used_at' => now(),
             ]
@@ -129,11 +137,13 @@ class AuthController extends Controller
             'message' => 'FCM token registered successfully.',
             'fcm_token' => $tokenRecord->fcm_token,
             'device_type' => $tokenRecord->device_type,
+            'active_devices_count' => $user->fcmTokens()->count(),
         ]);
     }
 
     /**
-     * Remove an FCM token when a user logs out from a device.
+     * Remove an FCM token when a user logs out from a specific device.
+     * Keeps other devices belonging to the same user active.
      */
     public function removeFcmToken(Request $request)
     {
@@ -142,10 +152,13 @@ class AuthController extends Controller
         ]);
 
         $user = $request->user();
-        $user->fcmTokens()->where('fcm_token', $request->fcm_token)->delete();
+        \App\Models\UserFcmToken::where('user_id', $user->id)
+            ->where('fcm_token', $request->fcm_token)
+            ->delete();
 
         return response()->json([
-            'message' => 'FCM token removed successfully.'
+            'message' => 'FCM token removed successfully from this device.',
+            'remaining_devices_count' => $user->fcmTokens()->count(),
         ]);
     }
 }

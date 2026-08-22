@@ -4,8 +4,12 @@ namespace App\Services;
 
 use App\Models\User;
 use App\Models\UserFcmToken;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Kreait\Firebase\Contract\Messaging;
+use Kreait\Firebase\Messaging\AndroidConfig;
+use Kreait\Firebase\Messaging\ApnsConfig;
+use Kreait\Firebase\Messaging\CloudMessage;
+use Kreait\Firebase\Messaging\Notification;
 
 class FcmNotificationService
 {
@@ -55,18 +59,16 @@ class FcmNotificationService
     }
 
     /**
-     * Core sender: sends FCM message to an array of tokens and prunes invalid/unregistered ones.
+     * Core sender: sends FCM message via HTTP v1 API to an array of tokens and prunes invalid/unregistered ones.
      */
     public static function sendToTokens(array $tokens, string $title, string $body, array $data = []): int
     {
-        $tokens = array_unique(array_filter($tokens));
+        $tokens = array_values(array_unique(array_filter($tokens)));
         if (empty($tokens)) {
             return 0;
         }
 
-        $serverKey = config('services.fcm.server_key') ?? env('FCM_SERVER_KEY');
-
-        // Stringify all data values for FCM compatibility
+        // Stringify all data values for FCM v1 compatibility
         $stringData = array_map(function ($val) {
             if (is_array($val) || is_object($val)) {
                 return json_encode($val);
@@ -74,50 +76,66 @@ class FcmNotificationService
             return (string)$val;
         }, $data);
 
-        $successCount = 0;
+        try {
+            /** @var Messaging $messaging */
+            $messaging = app('firebase.messaging');
 
-        if ($serverKey) {
-            try {
-                $response = Http::withHeaders([
-                    'Authorization' => 'key=' . $serverKey,
-                    'Content-Type' => 'application/json',
-                ])->post('https://fcm.googleapis.com/fcm/send', [
-                    'registration_ids' => array_values($tokens),
-                    'notification' => [
-                        'title' => $title,
-                        'body' => $body,
-                        'sound' => 'default',
-                    ],
-                    'data' => $stringData,
+            $message = CloudMessage::new()
+                ->withNotification(Notification::create($title, $body))
+                ->withData($stringData)
+                ->withAndroidConfig(AndroidConfig::fromArray([
                     'priority' => 'high',
-                ]);
+                    'notification' => [
+                        'channel_id' => 'high_importance_channel',
+                        'sound' => 'default',
+                        'default_sound' => true,
+                        'default_vibrate_timings' => true,
+                    ],
+                ]))
+                ->withApnsConfig(ApnsConfig::fromArray([
+                    'headers' => [
+                        'apns-priority' => '10',
+                    ],
+                    'payload' => [
+                        'aps' => [
+                            'alert' => [
+                                'title' => $title,
+                                'body' => $body,
+                            ],
+                            'sound' => 'default',
+                            'badge' => 1,
+                            'content-available' => 1,
+                        ],
+                    ],
+                ]));
 
-                if ($response->successful()) {
-                    $result = $response->json();
-                    $successCount = $result['success'] ?? 0;
+            $report = $messaging->sendMulticast($message, $tokens);
+            $successCount = $report->successes()->count();
 
-                    // Prune stale / unregistered tokens
-                    if (!empty($result['results'])) {
-                        foreach ($result['results'] as $index => $res) {
-                            if (isset($res['error']) && in_array($res['error'], ['NotRegistered', 'InvalidRegistration', 'MismatchSenderId'])) {
-                                $staleToken = $tokens[$index] ?? null;
-                                if ($staleToken) {
-                                    UserFcmToken::where('fcm_token', $staleToken)->delete();
-                                    Log::info("[FCM] Pruned stale token: {$staleToken}");
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    Log::warning('[FCM] Send failed: ' . $response->body());
+            // Collect invalid / unregistered / unknown tokens to prune
+            $staleTokens = array_unique(array_merge(
+                $report->invalidTokens(),
+                $report->unknownTokens()
+            ));
+
+            if (!empty($staleTokens)) {
+                try {
+                    UserFcmToken::whereIn('fcm_token', $staleTokens)->delete();
+                    Log::info('[FCM] Pruned ' . count($staleTokens) . ' stale/invalid tokens: ' . implode(', ', $staleTokens));
+                } catch (\Throwable $e) {
+                    Log::warning('[FCM] Failed to delete stale tokens: ' . $e->getMessage());
                 }
-            } catch (\Throwable $e) {
-                Log::error('[FCM] Exception while sending push notification: ' . $e->getMessage());
             }
-        } else {
-            Log::debug("[FCM] Push prepared for " . count($tokens) . " devices: '{$title}' - '{$body}'. Set FCM_SERVER_KEY in .env to enable dispatch.");
-        }
 
-        return $successCount;
+            Log::info("[FCM v1] Dispatched push notification '{$title}' to {$successCount}/" . count($tokens) . " device(s).");
+
+            return $successCount;
+        } catch (\Throwable $e) {
+            Log::error('[FCM v1] Exception while sending push notification: ' . $e->getMessage(), [
+                'exception' => $e,
+            ]);
+            return 0;
+        }
     }
 }
+

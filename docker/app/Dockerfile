@@ -24,9 +24,18 @@ RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
 # Install Redis extension
 RUN pecl install redis && docker-php-ext-enable redis
 
+# Configure OS file descriptor limits for high concurrency
+RUN echo "* soft nofile 65535" >> /etc/security/limits.conf && \
+    echo "* hard nofile 65535" >> /etc/security/limits.conf && \
+    echo "root soft nofile 65535" >> /etc/security/limits.conf && \
+    echo "root hard nofile 65535" >> /etc/security/limits.conf && \
+    echo "www-data soft nofile 65535" >> /etc/security/limits.conf && \
+    echo "www-data hard nofile 65535" >> /etc/security/limits.conf
+
 # Configure custom PHP file upload limits
 COPY docker/app/uploads.ini $PHP_INI_DIR/conf.d/uploads.ini
 COPY docker/app/99-uploads.ini $PHP_INI_DIR/conf.d/99-uploads.ini
+COPY docker/app/zz-docker.conf /usr/local/etc/php-fpm.d/zz-docker.conf
 
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer

@@ -5,11 +5,16 @@ services:
       dockerfile: docker/app/Dockerfile
     container_name: dropwave-app
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     volumes:
       - .:/var/www
       - ./docker/app/supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:ro
       - ./docker/app/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
       - ./docker/app/99-uploads.ini:/usr/local/etc/php/conf.d/99-uploads.ini:ro
+      - ./docker/app/zz-docker.conf:/usr/local/etc/php-fpm.d/zz-docker.conf:ro
     depends_on:
       - mysql
       - redis
@@ -20,6 +25,10 @@ services:
     image: nginx:alpine
     container_name: dropwave-nginx
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     ports:
       - "8000:80"
     volumes:

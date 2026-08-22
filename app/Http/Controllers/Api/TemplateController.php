@@ -7,6 +7,7 @@ use App\Models\MessageTemplate;
 use App\Models\WabaChannel;
 use App\Http\Requests\StoreTemplateRequest;
 use App\Services\MetaApiService;
+use App\Services\GeminiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Exception;
@@ -14,10 +15,12 @@ use Exception;
 class TemplateController extends Controller
 {
     protected MetaApiService $metaService;
+    protected GeminiService $geminiService;
 
-    public function __construct(MetaApiService $metaService)
+    public function __construct(MetaApiService $metaService, GeminiService $geminiService)
     {
         $this->metaService = $metaService;
+        $this->geminiService = $geminiService;
     }
 
     public function index(Request $request)
@@ -382,5 +385,26 @@ class TemplateController extends Controller
         return response()->json([
             'message' => 'Template deleted successfully.'
         ]);
+    }
+
+    /**
+     * Audit a message template using Google Gemini AI against Meta policies.
+     */
+    public function validateWithAi(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'nullable|string|max:512',
+            'category' => 'required|string|in:UTILITY,MARKETING,AUTHENTICATION',
+            'language' => 'required|string|max:10',
+            'header_type' => 'nullable|string|in:none,text',
+            'header_content' => 'nullable|string|max:100',
+            'body' => 'required|string|max:1024',
+            'footer' => 'nullable|string|max:100',
+            'variable_examples' => 'nullable|array',
+        ]);
+
+        $auditResult = $this->geminiService->auditMessageTemplate($validated);
+
+        return response()->json($auditResult);
     }
 }

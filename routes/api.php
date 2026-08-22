@@ -93,6 +93,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     // Templates
     Route::get('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'index']);
     Route::post('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'store']);
+    Route::post('/templates/validate-ai', [\App\Http\Controllers\Api\TemplateController::class, 'validateWithAi']);
     Route::delete('/templates/{id}', [\App\Http\Controllers\Api\TemplateController::class, 'destroy']);
     Route::post('/templates/sync', [\App\Http\Controllers\Api\TemplateController::class, 'sync']);
 

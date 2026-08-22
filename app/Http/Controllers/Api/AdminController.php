@@ -11,6 +11,7 @@ use App\Models\MessageTemplate;
 use App\Models\Tenant;
 use App\Models\WabaChannel;
 use App\Models\TenantBillingSnapshot;
+use App\Models\TenantAiUsage;
 use App\Models\User;
 use App\Models\Role;
 use App\Services\TenantBillingService;
@@ -350,6 +351,7 @@ class AdminController extends Controller
             'meta_expenses' => $billing['meta_total_estimated_cost'] ?? '0.0000',
             'channels' => $channels,
             'billing' => array_merge($billing, ['currency' => 'USD']),
+            'ai_usage' => TenantAiUsage::getTenantSummary($tenant->id),
         ]);
     }
 
@@ -1420,5 +1422,78 @@ class AdminController extends Controller
                 'message' => 'Failed to sync templates with Meta: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * List all tenants with their AI template audit daily usage and limits (Admin only).
+     */
+    public function listTenantAiUsages(Request $request)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $query = Tenant::query();
+
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('slug', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%");
+            });
+        }
+
+        $perPage = (int) $request->input('per_page', 15);
+        $tenants = $query->orderBy('name', 'asc')->paginate($perPage);
+
+        $tenants->getCollection()->transform(function ($tenant) {
+            $tenant->ai_usage = TenantAiUsage::getTenantSummary($tenant->id);
+            return $tenant;
+        });
+
+        $today = Carbon::today()->toDateString();
+        $totalUsedToday = (int) TenantAiUsage::where('usage_date', $today)->sum('requests_count');
+        $totalLifetime = (int) TenantAiUsage::sum('requests_count');
+        $activeTenantsToday = TenantAiUsage::where('usage_date', $today)->where('requests_count', '>', 0)->count();
+
+        return response()->json([
+            'tenants' => $tenants,
+            'metrics' => [
+                'total_used_today' => $totalUsedToday,
+                'active_tenants_today' => $activeTenantsToday,
+                'total_lifetime_audits' => $totalLifetime,
+                'default_daily_limit' => TenantAiUsage::DEFAULT_DAILY_LIMIT,
+            ]
+        ]);
+    }
+
+    /**
+     * Update a tenant's daily AI audit limit (Admin only).
+     */
+    public function updateTenantAiLimit(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $tenant = Tenant::find($tenantId);
+        if (!$tenant) {
+            return response()->json(['error' => 'not_found', 'message' => 'Tenant not found.'], 404);
+        }
+
+        $request->validate([
+            'daily_limit' => 'required|integer|min:1|max:10000',
+        ]);
+
+        $limit = (int) $request->daily_limit;
+        $usage = TenantAiUsage::forTenantToday($tenant->id, $limit);
+        $usage->daily_limit = $limit;
+        $usage->save();
+
+        return response()->json([
+            'message' => 'Tenant AI daily limit updated successfully.',
+            'ai_usage' => TenantAiUsage::getTenantSummary($tenant->id),
+        ]);
     }
 }

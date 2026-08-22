@@ -93,6 +93,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     // Templates
     Route::get('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'index']);
     Route::post('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'store']);
+    Route::get('/templates/ai-quota', [\App\Http\Controllers\Api\TemplateController::class, 'getAiQuota']);
     Route::post('/templates/validate-ai', [\App\Http\Controllers\Api\TemplateController::class, 'validateWithAi']);
     Route::delete('/templates/{id}', [\App\Http\Controllers\Api\TemplateController::class, 'destroy']);
     Route::post('/templates/sync', [\App\Http\Controllers\Api\TemplateController::class, 'sync']);
@@ -134,6 +135,8 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::delete('/admin/channels/{channelId}', [AdminController::class, 'deleteChannel']);
     Route::post('/admin/channels/{channelId}/override-webhook', [AdminController::class, 'overrideChannelWebhook']);
     Route::get('/admin/tenants/{tenantId}/details', [AdminController::class, 'getTenantDetails']);
+    Route::get('/admin/ai-usage', [AdminController::class, 'listTenantAiUsages']);
+    Route::put('/admin/tenants/{tenantId}/ai-limit', [AdminController::class, 'updateTenantAiLimit']);
     Route::get('/admin/tenants/{tenantId}/template-messages', [AdminController::class, 'getTenantTemplateMessages']);
     Route::post('/admin/tenants/{tenantId}/recalculate-expenses', [AdminController::class, 'recalculateTenantExpenses']);
     Route::post('/admin/tenants/{tenantId}/payment-status', [AdminController::class, 'updateTenantPaymentStatus']);

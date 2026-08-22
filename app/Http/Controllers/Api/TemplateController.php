@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\MessageTemplate;
 use App\Models\WabaChannel;
+use App\Models\TenantAiUsage;
 use App\Http\Requests\StoreTemplateRequest;
 use App\Services\MetaApiService;
 use App\Services\GeminiService;
@@ -388,11 +389,45 @@ class TemplateController extends Controller
     }
 
     /**
-     * Audit a message template using Google Gemini AI against Meta policies.
+     * Get current tenant's AI template audit quota.
+     */
+    public function getAiQuota(Request $request)
+    {
+        $user = $request->user();
+        $tenantId = $user->tenant_id;
+
+        if ($user->isAdmin() && $request->filled('tenant_id')) {
+            $tenantId = (int) $request->tenant_id;
+        } elseif ($request->filled('channel_id')) {
+            $channel = WabaChannel::withoutGlobalScopes()->find($request->channel_id);
+            if ($channel && $channel->tenant_id) {
+                $tenantId = (int) $channel->tenant_id;
+            }
+        }
+
+        if (!$tenantId) {
+            return response()->json([
+                'today_used' => 0,
+                'daily_limit' => TenantAiUsage::DEFAULT_DAILY_LIMIT,
+                'remaining_today' => TenantAiUsage::DEFAULT_DAILY_LIMIT,
+                'lifetime_audits' => 0,
+                'is_limit_reached' => false,
+            ]);
+        }
+
+        $summary = TenantAiUsage::getTenantSummary($tenantId);
+
+        return response()->json($summary);
+    }
+
+    /**
+     * Audit a message template using Google Gemini AI against Meta policies with tenant rate limiting.
      */
     public function validateWithAi(Request $request)
     {
         $validated = $request->validate([
+            'tenant_id' => 'nullable|integer',
+            'channel_id' => 'nullable|integer',
             'name' => 'nullable|string|max:512',
             'category' => 'required|string|in:UTILITY,MARKETING,AUTHENTICATION',
             'language' => 'required|string|max:10',
@@ -403,7 +438,59 @@ class TemplateController extends Controller
             'variable_examples' => 'nullable|array',
         ]);
 
+        $user = $request->user();
+        $tenantId = $user ? $user->tenant_id : null;
+
+        if ($user && $user->isAdmin() && $request->filled('tenant_id')) {
+            $tenantId = (int) $request->tenant_id;
+        } elseif ($request->filled('channel_id')) {
+            $channel = WabaChannel::withoutGlobalScopes()->find($request->channel_id);
+            if ($channel && $channel->tenant_id) {
+                $tenantId = (int) $channel->tenant_id;
+            }
+        }
+
+        // Enforce daily rate limit per tenant (50 free responses/day)
+        if ($tenantId && !TenantAiUsage::canAudit($tenantId)) {
+            $quota = TenantAiUsage::getTenantSummary($tenantId);
+
+            return response()->json([
+                'success' => false,
+                'passed' => false,
+                'status' => 'RATE_LIMIT_EXCEEDED',
+                'confidence_score' => 0,
+                'decision_summary' => "Daily AI template audit limit reached ({$quota['today_used']}/{$quota['daily_limit']}) for this workspace. Free quota resets daily at 00:00 UTC.",
+                'category_analysis' => [
+                    'selected_category' => $validated['category'],
+                    'recommended_category' => $validated['category'],
+                    'is_category_correct' => true,
+                    'explanation' => 'AI audit limit reached for today.'
+                ],
+                'policy_compliance' => [
+                    'violates_meta_policy' => false,
+                    'violations' => []
+                ],
+                'formatting_compliance' => [
+                    'is_valid_format' => true,
+                    'issues' => []
+                ],
+                'recommendations' => [
+                    'Your workspace has used its daily free quota of 50 AI template audits.',
+                    'The limit will reset tomorrow at 00:00 UTC, or you can contact the platform administrator to increase your workspace daily limit.'
+                ],
+                'suggested_template' => null,
+                'quota' => $quota
+            ], 429);
+        }
+
         $auditResult = $this->geminiService->auditMessageTemplate($validated);
+
+        if ($tenantId) {
+            if (!empty($auditResult['success'])) {
+                TenantAiUsage::recordAudit($tenantId);
+            }
+            $auditResult['quota'] = TenantAiUsage::getTenantSummary($tenantId);
+        }
 
         return response()->json($auditResult);
     }

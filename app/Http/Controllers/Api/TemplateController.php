@@ -487,7 +487,7 @@ class TemplateController extends Controller
 
         if ($tenantId) {
             if (!empty($auditResult['success'])) {
-                TenantAiUsage::recordAudit($tenantId);
+                TenantAiUsage::recordAudit($tenantId, $auditResult['tokens'] ?? []);
             }
             $auditResult['quota'] = TenantAiUsage::getTenantSummary($tenantId);
         }

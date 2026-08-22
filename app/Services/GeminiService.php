@@ -192,7 +192,22 @@ PROMPT;
                 throw new Exception('Invalid JSON response format from Gemini AI.');
             }
 
-            return array_merge(['success' => true], $parsed);
+            $usage = $resultData['usageMetadata'] ?? [];
+            $promptTokens = (int) ($usage['promptTokenCount'] ?? 0);
+            $completionTokens = (int) ($usage['candidatesTokenCount'] ?? 0);
+            $totalTokens = (int) ($usage['totalTokenCount'] ?? ($promptTokens + $completionTokens));
+
+            // Calculate estimated expense ($0.075 / 1M prompt tokens, $0.30 / 1M completion tokens)
+            $estimatedCost = ($promptTokens * 0.000000075) + ($completionTokens * 0.00000030);
+
+            $tokensSummary = [
+                'prompt_tokens' => $promptTokens,
+                'completion_tokens' => $completionTokens,
+                'total_tokens' => $totalTokens,
+                'estimated_cost' => round($estimatedCost, 6),
+            ];
+
+            return array_merge(['success' => true, 'tokens' => $tokensSummary], $parsed);
 
         } catch (Exception $e) {
             Log::error('Exception in GeminiService@auditMessageTemplate', [

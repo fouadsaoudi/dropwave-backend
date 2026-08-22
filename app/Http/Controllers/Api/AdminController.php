@@ -1454,7 +1454,15 @@ class AdminController extends Controller
 
         $today = Carbon::today()->toDateString();
         $totalUsedToday = (int) TenantAiUsage::where('usage_date', $today)->sum('requests_count');
-        $totalLifetime = (int) TenantAiUsage::sum('requests_count');
+        $totalPromptTokensToday = (int) TenantAiUsage::where('usage_date', $today)->sum('prompt_tokens');
+        $totalCompletionTokensToday = (int) TenantAiUsage::where('usage_date', $today)->sum('completion_tokens');
+        $totalTokensToday = (int) TenantAiUsage::where('usage_date', $today)->sum('total_tokens');
+        $totalCostToday = (float) TenantAiUsage::where('usage_date', $today)->sum('estimated_cost');
+
+        $totalLifetimeAudits = (int) TenantAiUsage::sum('requests_count');
+        $totalLifetimeTokens = (int) TenantAiUsage::sum('total_tokens');
+        $totalLifetimeCost = (float) TenantAiUsage::sum('estimated_cost');
+
         $activeTenantsToday = TenantAiUsage::where('usage_date', $today)->where('requests_count', '>', 0)->count();
 
         return response()->json([
@@ -1462,7 +1470,15 @@ class AdminController extends Controller
             'metrics' => [
                 'total_used_today' => $totalUsedToday,
                 'active_tenants_today' => $activeTenantsToday,
-                'total_lifetime_audits' => $totalLifetime,
+                'total_tokens_today' => $totalTokensToday,
+                'total_prompt_tokens_today' => $totalPromptTokensToday,
+                'total_completion_tokens_today' => $totalCompletionTokensToday,
+                'total_estimated_cost_today' => number_format($totalCostToday, 6, '.', ''),
+                'total_lifetime_audits' => $totalLifetimeAudits,
+                'total_lifetime_tokens' => $totalLifetimeTokens,
+                'total_lifetime_estimated_cost' => number_format($totalLifetimeCost, 6, '.', ''),
+                'free_tier_daily_quota' => 1500,
+                'free_tier_remaining_today' => max(0, 1500 - $totalUsedToday),
                 'default_daily_limit' => TenantAiUsage::DEFAULT_DAILY_LIMIT,
             ]
         ]);

@@ -165,4 +165,80 @@ class ContactController extends Controller
             'total_queued' => $totalQueued
         ]);
     }
+
+    /**
+     * Batch sync contacts from mobile device into database.
+     */
+    public function batchSync(Request $request)
+    {
+        $request->validate([
+            'contacts' => 'required|array|max:2000',
+            'contacts.*.name' => 'nullable|string|max:255',
+            'contacts.*.phone_number' => 'required|string|max:50',
+        ]);
+
+        $tenantId = Auth::user()->tenant_id;
+        $contactsData = $request->input('contacts', []);
+
+        $newCount = 0;
+        $updatedCount = 0;
+        $processedPhones = [];
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($tenantId, $contactsData, &$newCount, &$updatedCount, &$processedPhones) {
+            foreach ($contactsData as $item) {
+                $rawPhone = $item['phone_number'] ?? '';
+                // Standardize phone number (digits and optional leading +)
+                $phone = preg_replace('/[^\d+]/', '', $rawPhone);
+
+                if (empty($phone)) {
+                    continue;
+                }
+
+                if (!str_starts_with($phone, '+') && preg_match('/^\d/', $phone)) {
+                    $phone = '+' . $phone;
+                }
+
+                // Skip numbers that are invalid or already processed in this batch
+                if (strlen($phone) < 7 || strlen($phone) > 20 || in_array($phone, $processedPhones, true)) {
+                    continue;
+                }
+
+                $processedPhones[] = $phone;
+                $name = trim($item['name'] ?? '');
+                if (empty($name)) {
+                    $name = $phone;
+                }
+
+                $contact = Contact::withoutGlobalScopes()
+                    ->where('tenant_id', $tenantId)
+                    ->where('phone_number', $phone)
+                    ->first();
+
+                if ($contact) {
+                    // Update name if current name is empty or identical to phone number
+                    if (empty($contact->name) || $contact->name === $contact->phone_number) {
+                        $contact->update(['name' => $name]);
+                        $updatedCount++;
+                    }
+                } else {
+                    Contact::create([
+                        'tenant_id' => $tenantId,
+                        'name' => $name,
+                        'phone_number' => $phone,
+                        'added_via' => 'manual',
+                    ]);
+                    $newCount++;
+                }
+            }
+        });
+
+        $totalSynced = count($processedPhones);
+
+        return response()->json([
+            'message' => "Successfully processed {$totalSynced} contacts ({$newCount} added, {$updatedCount} updated).",
+            'synced_count' => $totalSynced,
+            'new_count' => $newCount,
+            'updated_count' => $updatedCount,
+        ]);
+    }
 }

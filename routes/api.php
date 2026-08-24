@@ -85,6 +85,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::put('/contacts/{id}', [\App\Http\Controllers\Api\ContactController::class, 'update']);
     Route::delete('/contacts/{id}', [\App\Http\Controllers\Api\ContactController::class, 'destroy']);
     Route::post('/contacts/import', [\App\Http\Controllers\Api\ContactController::class, 'import']);
+    Route::post('/contacts/sync', [\App\Http\Controllers\Api\ContactController::class, 'batchSync']);
     Route::get('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'index']);
     Route::post('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'store']);
     Route::delete('/addresses/{id}', [\App\Http\Controllers\Api\AddressController::class, 'destroy']);

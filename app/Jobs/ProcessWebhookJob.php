@@ -82,6 +82,26 @@ class ProcessWebhookJob implements ShouldQueue
             // Find the WABA Channel
             $channel = WabaChannel::withoutGlobalScopes()->where('phone_number_id', $phoneId)->first();
             if (!$channel) {
+                // Fallback: Check by waba_id, entry ID, or display phone number
+                $displayPhone = $value['metadata']['display_phone_number'] ?? null;
+                $wabaId = $entry['id'] ?? null;
+
+                $channel = WabaChannel::withoutGlobalScopes()
+                    ->where(function ($q) use ($phoneId, $wabaId, $displayPhone) {
+                        $q->where('waba_id', $phoneId);
+                        if ($wabaId) {
+                            $q->orWhere('waba_id', $wabaId)
+                              ->orWhere('phone_number_id', $wabaId);
+                        }
+                        if ($displayPhone) {
+                            $clean = preg_replace('/[^\d]/', '', $displayPhone);
+                            $q->orWhere('phone_number', 'like', "%{$clean}%");
+                        }
+                    })
+                    ->first();
+            }
+
+            if (!$channel) {
                 throw new Exception("WABA Channel not configured in system for phone ID: " . $phoneId);
             }
 

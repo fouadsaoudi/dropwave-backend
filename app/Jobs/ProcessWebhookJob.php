@@ -8,6 +8,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use App\Models\WebhookEvent;
 use App\Models\WabaChannel;
+use App\Models\MessageTemplate;
 use App\Models\Contact;
 use App\Models\Conversation;
 use App\Models\Message;
@@ -48,6 +49,19 @@ class ProcessWebhookJob implements ShouldQueue
             $value = $change['value'] ?? null;
 
             if (!$value) {
+                $event->update([
+                    'processed' => true,
+                    'processed_at' => now(),
+                ]);
+                return;
+            }
+
+            $field = $change['field'] ?? null;
+
+            // Handle WhatsApp Message Template Status Update (WABA-level event)
+            if ($field === 'message_template_status_update') {
+                $wabaId = $entry['id'] ?? null;
+                $this->processMessageTemplateStatusUpdate($value, $wabaId, $event);
                 $event->update([
                     'processed' => true,
                     'processed_at' => now(),
@@ -879,5 +893,68 @@ class ProcessWebhookJob implements ShouldQueue
                 broadcast(new \App\Events\ConversationUpdated($conversation));
             }
         });
+    }
+
+    /**
+     * Process Meta Message Template status updates (APPROVED, REJECTED, PAUSED, etc.)
+     */
+    protected function processMessageTemplateStatusUpdate(array $value, ?string $wabaId, WebhookEvent $event): void
+    {
+        $metaTemplateId = $value['message_template_id'] ?? null;
+        $templateName = $value['message_template_name'] ?? null;
+        $metaEvent = strtoupper($value['event'] ?? '');
+        $reason = $value['reason'] ?? null;
+
+        $status = match ($metaEvent) {
+            'APPROVED' => 'APPROVED',
+            'REJECTED' => 'REJECTED',
+            'PAUSED' => 'PAUSED',
+            'PENDING_DELETION' => 'REJECTED',
+            default => 'PENDING',
+        };
+
+        // Find template by meta_template_id or name (+ WABA channel)
+        $template = null;
+        if ($metaTemplateId) {
+            $template = MessageTemplate::withoutGlobalScopes()
+                ->where('meta_template_id', (string) $metaTemplateId)
+                ->first();
+        }
+
+        if (!$template && $templateName) {
+            $query = MessageTemplate::withoutGlobalScopes()->where('name', $templateName);
+            if ($wabaId) {
+                $query->whereHas('channel', function ($q) use ($wabaId) {
+                    $q->where('waba_id', $wabaId);
+                });
+            }
+            $template = $query->first();
+        }
+
+        if ($template) {
+            $event->update(['tenant_id' => $template->tenant_id]);
+
+            $updateData = [
+                'status' => $status,
+                'rejection_reason' => $status === 'REJECTED' ? ($reason ?? 'Rejected by Meta') : null,
+            ];
+            if ($status === 'APPROVED' && !$template->approved_at) {
+                $updateData['approved_at'] = now();
+            }
+
+            $template->update($updateData);
+
+            Log::info("MessageTemplate ID {$template->id} ('{$template->name}') status updated to {$status} via webhook.", [
+                'meta_template_id' => $metaTemplateId,
+                'reason' => $reason,
+                'tenant_id' => $template->tenant_id,
+            ]);
+        } else {
+            Log::warning("Received message_template_status_update webhook for unknown template.", [
+                'meta_template_id' => $metaTemplateId,
+                'template_name' => $templateName,
+                'waba_id' => $wabaId,
+            ]);
+        }
     }
 }

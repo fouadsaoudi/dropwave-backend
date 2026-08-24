@@ -57,6 +57,14 @@ class Contact extends Model
     }
 
     /**
+     * Always normalize phone numbers into standardized E.164 format (+961...).
+     */
+    public function setPhoneNumberAttribute($value)
+    {
+        $this->attributes['phone_number'] = \App\Services\PhoneService::normalize($value);
+    }
+
+    /**
      * Fallback to driver name if contact name is empty.
      */
     public function getNameAttribute($value)

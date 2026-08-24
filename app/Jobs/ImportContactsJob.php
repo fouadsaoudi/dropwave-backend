@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Contact;
+use App\Services\PhoneService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -35,16 +36,11 @@ class ImportContactsJob implements ShouldQueue
         $now = Carbon::now();
 
         foreach ($this->contacts as $contact) {
-            // Normalize phone number (remove spaces, dashes)
-            $phone = preg_replace('/[^\d+]/', '', $contact['phone_number'] ?? '');
+            // Normalize phone number to E.164
+            $phone = PhoneService::normalize($contact['phone_number'] ?? '');
             
             if (empty($phone)) {
                 continue;
-            }
-
-            // Standardize format: if it starts with digit, prepend plus sign
-            if (!str_starts_with($phone, '+') && preg_match('/^\d/', $phone)) {
-                $phone = '+' . $phone;
             }
 
             // Ensure normalized number is formatted as a valid E.164 string

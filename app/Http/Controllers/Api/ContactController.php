@@ -7,6 +7,7 @@ use App\Models\Contact;
 use App\Http\Requests\StoreContactRequest;
 use App\Http\Requests\UpdateContactRequest;
 use App\Jobs\ImportContactsJob;
+use App\Services\PhoneService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Exception;
@@ -187,19 +188,15 @@ class ContactController extends Controller
         \Illuminate\Support\Facades\DB::transaction(function () use ($tenantId, $contactsData, &$newCount, &$updatedCount, &$processedPhones) {
             foreach ($contactsData as $item) {
                 $rawPhone = $item['phone_number'] ?? '';
-                // Standardize phone number (digits and optional leading +)
-                $phone = preg_replace('/[^\d+]/', '', $rawPhone);
+                // Normalize phone number to standardized international E.164 (+961...)
+                $phone = PhoneService::normalize($rawPhone);
 
                 if (empty($phone)) {
                     continue;
                 }
 
-                if (!str_starts_with($phone, '+') && preg_match('/^\d/', $phone)) {
-                    $phone = '+' . $phone;
-                }
-
                 // Skip numbers that are invalid or already processed in this batch
-                if (strlen($phone) < 7 || strlen($phone) > 20 || in_array($phone, $processedPhones, true)) {
+                if (strlen($phone) < 8 || strlen($phone) > 20 || in_array($phone, $processedPhones, true)) {
                     continue;
                 }
 

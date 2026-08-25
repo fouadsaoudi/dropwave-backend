@@ -7,11 +7,11 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Models\Role;
 use App\Models\Contact;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
 
 class ContactSyncTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseTransactions;
 
     private User $user;
     private Tenant $tenant;

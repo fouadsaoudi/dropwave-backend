@@ -5,11 +5,12 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\BelongsToTenant;
 
 class Message extends Model
 {
-    use BelongsToTenant;
+    use BelongsToTenant, SoftDeletes;
     protected $fillable = [
         'tenant_id',
         'conversation_id',
@@ -27,6 +28,7 @@ class Message extends Model
         'reaction_to_msg_id',
         'whatsapp_msg_id',
         'is_internal',
+        'is_edited',
         'status',
         'error_code',
         'error_message',
@@ -42,6 +44,7 @@ class Message extends Model
         'latitude' => 'decimal:8',
         'longitude' => 'decimal:8',
         'is_internal' => 'boolean',
+        'is_edited' => 'boolean',
         'sent_at' => 'datetime',
         'delivered_at' => 'datetime',
         'read_at' => 'datetime',

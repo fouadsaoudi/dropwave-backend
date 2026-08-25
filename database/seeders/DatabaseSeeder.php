@@ -76,6 +76,20 @@ class DatabaseSeeder extends Seeder
             'connected_at' => now(),
         ]);
 
+        // 5. Create a Mock WabaChannel for Click & Pick
+        $channel = WabaChannel::create([
+            'tenant_id' => $tenant->id,
+            'display_name' => 'Test Number',
+            'phone_number' => '+15556780733',
+            'phone_number_id' => '1164485163424169',
+            'waba_id' => '1024879630158066',
+            'access_token' => 'EAAdh5YqDpdgBSWUD9LTopZBHX6CdzHbORiKMzKpAUJHzZB1ZCECcqZA3znCfivxH7LrnMEmA1gDgudRUuELZBSF3XbEqhwW1x8XBc1ZBDcTnE1OJQGfrswZB0FB15Ocaf6mNx2Xqsw7XZBZBoJhePY99dOb6t8ATQfTIYZAcHqGA1HaaLaUZBubNvFSmze9ywWB5QZDZD',
+            'quality_rating' => '',
+            'is_active' => true,
+            'is_primary' => true,
+            'connected_at' => now(),
+        ]);
+
         // 6. Create Mock Contact
         $contact = Contact::create([
             'tenant_id' => $tenant->id,

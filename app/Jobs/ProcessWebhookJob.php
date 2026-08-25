@@ -197,6 +197,162 @@ class ProcessWebhookJob implements ShouldQueue
             }
         }
 
+        $type = $msg['type'] ?? 'text';
+
+        // Handle WhatsApp revoke webhook (Message deleted by sender)
+        if ($type === 'revoke') {
+            $originalMsgId = $msg['revoke']['original_message_id'] ?? null;
+            if (!$originalMsgId) {
+                Log::warning("ProcessWebhookJob: Revoke message event missing original_message_id", ['msg' => $msg]);
+                return;
+            }
+
+            DB::transaction(function () use ($channel, $originalMsgId, $fromNumber, $waId, $timestamp) {
+                $targetMessage = Message::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('whatsapp_msg_id', $originalMsgId)
+                    ->whereNull('deleted_at')
+                    ->first();
+
+                if (!$targetMessage) {
+                    Log::info("ProcessWebhookJob: Target message not found or already deleted for revoke: {$originalMsgId}");
+                    return;
+                }
+
+                $conversationId = $targetMessage->conversation_id;
+                $targetMessageId = $targetMessage->id;
+
+                // Soft-delete any reactions attached to this message
+                Message::withoutGlobalScopes()
+                    ->where('conversation_id', $conversationId)
+                    ->where('type', 'reaction')
+                    ->where('reaction_to_msg_id', $targetMessageId)
+                    ->delete();
+
+                // Soft-delete target message
+                $targetMessage->delete();
+                Log::info("ProcessWebhookJob: Soft-deleted message ID {$targetMessageId} (WhatsApp ID: {$originalMsgId})");
+
+                // Update contact's last_seen_at
+                Contact::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('phone_number', $fromNumber)
+                    ->update(['last_seen_at' => $timestamp]);
+
+                // Recalculate conversation's last_message_body and last_message_at
+                $conversation = Conversation::withoutGlobalScopes()->find($conversationId);
+                if ($conversation) {
+                    $latestMessage = Message::withoutGlobalScopes()
+                        ->where('conversation_id', $conversationId)
+                        ->where('type', '!=', 'reaction')
+                        ->whereNull('deleted_at')
+                        ->orderByDesc('sent_at')
+                        ->orderByDesc('id')
+                        ->first();
+
+                    if ($latestMessage) {
+                        $lastBody = $latestMessage->body;
+                        if (empty($lastBody)) {
+                            $lastBody = match ($latestMessage->type) {
+                                'image' => '📷 Photo',
+                                'audio', 'voice' => '🎵 Voice Note',
+                                'video' => '🎥 Video',
+                                'document' => '📄 Document',
+                                'location' => '📍 Location',
+                                'sticker' => '✨ Sticker',
+                                default => '✉️ Message',
+                            };
+                        }
+                        $conversation->update([
+                            'last_message_body' => $lastBody,
+                            'last_message_at' => $latestMessage->sent_at ?? $latestMessage->created_at,
+                        ]);
+                    } else {
+                        $conversation->update([
+                            'last_message_body' => null,
+                        ]);
+                    }
+
+                    broadcast(new \App\Events\MessageDeleted($targetMessageId, $originalMsgId, $conversationId, $channel->tenant_id));
+                    broadcast(new \App\Events\ConversationUpdated($conversation));
+                }
+            });
+
+            return;
+        }
+
+        // Handle WhatsApp edit webhook (Message edited by sender)
+        if ($type === 'edit') {
+            $originalMsgId = $msg['edit']['original_message_id'] ?? null;
+            $editedMessageObj = $msg['edit']['message'] ?? [];
+            $nestedType = $editedMessageObj['type'] ?? 'text';
+
+            $newBody = null;
+            if ($nestedType === 'text') {
+                $newBody = $editedMessageObj['text']['body'] ?? null;
+            } elseif (in_array($nestedType, ['image', 'video', 'document'])) {
+                $newBody = $editedMessageObj[$nestedType]['caption'] ?? null;
+            } else {
+                $newBody = $editedMessageObj['text']['body'] ?? ($editedMessageObj['caption'] ?? null);
+            }
+
+            if (!$originalMsgId) {
+                Log::warning("ProcessWebhookJob: Edit message event missing original_message_id", ['msg' => $msg]);
+                return;
+            }
+
+            DB::transaction(function () use ($channel, $originalMsgId, $newBody, $fromNumber, $timestamp) {
+                $targetMessage = Message::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('whatsapp_msg_id', $originalMsgId)
+                    ->whereNull('deleted_at')
+                    ->first();
+
+                if (!$targetMessage) {
+                    Log::info("ProcessWebhookJob: Target message not found or deleted for edit: {$originalMsgId}");
+                    return;
+                }
+
+                $updateData = ['is_edited' => true];
+                if ($newBody !== null) {
+                    $updateData['body'] = $newBody;
+                }
+
+                $targetMessage->update($updateData);
+                Log::info("ProcessWebhookJob: Updated message ID {$targetMessage->id} (WhatsApp ID: {$originalMsgId}) with edited text.");
+
+                // Update contact's last_seen_at
+                Contact::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('phone_number', $fromNumber)
+                    ->update(['last_seen_at' => $timestamp]);
+
+                // Update conversation preview if this was the latest message
+                $conversation = Conversation::withoutGlobalScopes()->find($targetMessage->conversation_id);
+                if ($conversation) {
+                    $latestMessage = Message::withoutGlobalScopes()
+                        ->where('conversation_id', $conversation->id)
+                        ->where('type', '!=', 'reaction')
+                        ->whereNull('deleted_at')
+                        ->orderByDesc('sent_at')
+                        ->orderByDesc('id')
+                        ->first();
+
+                    if ($latestMessage && $latestMessage->id === $targetMessage->id && $newBody !== null) {
+                        $conversation->update([
+                            'last_message_body' => $newBody,
+                        ]);
+                    }
+
+                    $targetMessage->load(['sender', 'reactions.sender']);
+                    broadcast(new \App\Events\MessageBroadcasted($targetMessage));
+                    broadcast(new \App\Events\ConversationUpdated($conversation));
+                }
+            });
+
+            return;
+        }
+
         DB::transaction(function () use ($channel, $fromNumber, $waId, $msgId, $timestamp, $contactName, $msg) {
             // 1. Resolve Contact
             $contact = Contact::withoutGlobalScopes()->where([
@@ -648,6 +804,10 @@ class ProcessWebhookJob implements ShouldQueue
                 return '✨ Sticker';
             case 'reaction':
                 return '❤️ Reaction';
+            case 'revoke':
+                return '🚫 Message deleted';
+            case 'edit':
+                return '✏️ Edited message';
             default:
                 return '✉️ Message';
         }

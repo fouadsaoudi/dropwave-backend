@@ -76,21 +76,21 @@ class DashboardController extends Controller
             ->count();
 
         // Monthly stats for the target month
-        $monthlyMessagesCount = Message::where('tenant_id', $tenantId)
+        $monthlyMessagesCount = Message::withTrashed()->where('tenant_id', $tenantId)
             ->whereBetween('created_at', [$startOfTargetMonth, $endOfTargetMonth])
             ->count();
 
-        $monthlyInbound = Message::where('tenant_id', $tenantId)
+        $monthlyInbound = Message::withTrashed()->where('tenant_id', $tenantId)
             ->where('direction', 'inbound')
             ->whereBetween('created_at', [$startOfTargetMonth, $endOfTargetMonth])
             ->count();
 
-        $monthlyOutbound = Message::where('tenant_id', $tenantId)
+        $monthlyOutbound = Message::withTrashed()->where('tenant_id', $tenantId)
             ->where('direction', 'outbound')
             ->whereBetween('created_at', [$startOfTargetMonth, $endOfTargetMonth])
             ->count();
 
-        $statusCounts = Message::where('tenant_id', $tenantId)
+        $statusCounts = Message::withTrashed()->where('tenant_id', $tenantId)
             ->where('direction', 'outbound')
             ->whereBetween('created_at', [$startOfTargetMonth, $endOfTargetMonth])
             ->select('status', DB::raw('count(*) as count'))

@@ -134,6 +134,7 @@ class TenantBillingService
             ->pluck('channel_id', 'id');
 
         $inboundMessages = Message::withoutGlobalScopes()
+            ->withTrashed()
             ->where('tenant_id', $tenant->id)
             ->where('direction', 'inbound')
             ->where('status', '!=', 'failed')
@@ -155,6 +156,7 @@ class TenantBillingService
             ]);
 
         $previousInboundAt = Message::withoutGlobalScopes()
+            ->withTrashed()
             ->where('tenant_id', $tenant->id)
             ->where('direction', 'inbound')
             ->where('status', '!=', 'failed')
@@ -210,6 +212,7 @@ class TenantBillingService
         }
 
         $templateMessages = Message::withoutGlobalScopes()
+            ->withTrashed()
             ->with(['template:id,category,billing_cost,channel_id'])
             ->where('tenant_id', $tenant->id)
             ->where('direction', 'outbound')

@@ -90,6 +90,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/contacts/{contactId}/addresses', [\App\Http\Controllers\Api\AddressController::class, 'store']);
     Route::delete('/addresses/{id}', [\App\Http\Controllers\Api\AddressController::class, 'destroy']);
     Route::get('/geocoding/reverse', [\App\Http\Controllers\Api\AddressController::class, 'reverseGeocode']);
+    Route::get('/addresses/reverse-geocode', [\App\Http\Controllers\Api\AddressController::class, 'reverseGeocode']);
 
     // Templates
     Route::get('/templates', [\App\Http\Controllers\Api\TemplateController::class, 'index']);

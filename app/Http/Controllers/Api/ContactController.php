@@ -19,7 +19,7 @@ class ContactController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Contact::query();
+        $query = Contact::query()->with('addresses');
 
         if ($request->has('search') && !empty($request->search)) {
             $search = $request->search;
@@ -29,7 +29,12 @@ class ContactController extends Controller
             });
         }
 
-        $contacts = $query->orderBy('name', 'asc')->paginate(15);
+        $perPage = (int) $request->input('per_page', 50);
+        if ($perPage <= 0 || $perPage > 200) {
+            $perPage = 50;
+        }
+
+        $contacts = $query->orderBy('name', 'asc')->paginate($perPage);
 
         return response()->json($contacts);
     }

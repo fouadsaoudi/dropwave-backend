@@ -173,7 +173,7 @@ class ContactController extends Controller
     public function batchSync(Request $request)
     {
         $request->validate([
-            'contacts' => 'required|array|max:2000',
+            'contacts' => 'required|array',
             'contacts.*.name' => 'nullable|string|max:255',
             'contacts.*.phone_number' => 'required|string|max:50',
         ]);

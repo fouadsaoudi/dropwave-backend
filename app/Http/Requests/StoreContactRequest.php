@@ -24,6 +24,8 @@ class StoreContactRequest extends FormRequest
 
         return [
             'name' => 'required|string|max:255',
+            'email' => 'nullable|email|max:255',
+            'address' => 'nullable|string|max:500',
             'phone_number' => [
                 'required',
                 'string',

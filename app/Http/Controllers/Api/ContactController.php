@@ -42,13 +42,20 @@ class ContactController extends Controller
         $contact = Contact::create([
             'tenant_id' => Auth::user()->tenant_id,
             'name' => $request->name,
+            'email' => $request->email,
             'phone_number' => $request->phone_number,
             'added_via' => 'manual',
         ]);
 
+        if ($request->filled('address')) {
+            $contact->addresses()->create([
+                'line_1' => $request->address,
+            ]);
+        }
+
         return response()->json([
             'message' => 'Contact created successfully.',
-            'contact' => $contact
+            'contact' => $contact->load('addresses')
         ], 201);
     }
 

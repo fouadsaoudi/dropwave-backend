@@ -8,9 +8,29 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasColumn('message_templates', 'billing_cost')) {
-            DB::statement('ALTER TABLE message_templates MODIFY billing_cost DECIMAL(10,4) NULL');
+        if (DB::getDriverName() !== 'sqlite') {
+            if (Schema::hasColumn('message_templates', 'billing_cost')) {
+                DB::statement('ALTER TABLE message_templates MODIFY billing_cost DECIMAL(10,4) NULL');
+            }
 
+            if (Schema::hasColumn('tenant_billing_snapshots', 'billable_window_rate')) {
+                DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY billable_window_rate DECIMAL(10,4) NOT NULL DEFAULT 0.0100');
+            }
+
+            if (Schema::hasColumn('tenant_billing_snapshots', 'billable_conversation_cost')) {
+                DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY billable_conversation_cost DECIMAL(10,4) NOT NULL DEFAULT 0.0000');
+            }
+
+            if (Schema::hasColumn('tenant_billing_snapshots', 'template_cost_total')) {
+                DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY template_cost_total DECIMAL(10,4) NOT NULL DEFAULT 0.0000');
+            }
+
+            if (Schema::hasColumn('tenant_billing_snapshots', 'total_estimated_cost')) {
+                DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY total_estimated_cost DECIMAL(10,4) NOT NULL DEFAULT 0.0000');
+            }
+        }
+
+        if (Schema::hasColumn('message_templates', 'billing_cost')) {
             DB::table('message_templates')
                 ->whereNull('billing_cost')
                 ->update([
@@ -22,22 +42,6 @@ return new class extends Migration
                         ELSE 0.0000
                     END"),
                 ]);
-        }
-
-        if (Schema::hasColumn('tenant_billing_snapshots', 'billable_window_rate')) {
-            DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY billable_window_rate DECIMAL(10,4) NOT NULL DEFAULT 0.0100');
-        }
-
-        if (Schema::hasColumn('tenant_billing_snapshots', 'billable_conversation_cost')) {
-            DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY billable_conversation_cost DECIMAL(10,4) NOT NULL DEFAULT 0.0000');
-        }
-
-        if (Schema::hasColumn('tenant_billing_snapshots', 'template_cost_total')) {
-            DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY template_cost_total DECIMAL(10,4) NOT NULL DEFAULT 0.0000');
-        }
-
-        if (Schema::hasColumn('tenant_billing_snapshots', 'total_estimated_cost')) {
-            DB::statement('ALTER TABLE tenant_billing_snapshots MODIFY total_estimated_cost DECIMAL(10,4) NOT NULL DEFAULT 0.0000');
         }
     }
 

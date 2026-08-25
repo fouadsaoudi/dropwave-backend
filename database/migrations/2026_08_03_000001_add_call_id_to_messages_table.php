@@ -14,7 +14,9 @@ return new class extends Migration
         });
 
         // Modify the enum type column in MySQL to include 'call'
-        DB::statement("ALTER TABLE messages MODIFY COLUMN type ENUM('text', 'image', 'audio', 'video', 'document', 'location', 'sticker', 'reaction', 'template', 'unsupported', 'call') NOT NULL DEFAULT 'text'");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE messages MODIFY COLUMN type ENUM('text', 'image', 'audio', 'video', 'document', 'location', 'sticker', 'reaction', 'template', 'unsupported', 'call') NOT NULL DEFAULT 'text'");
+        }
     }
 
     public function down(): void
@@ -24,6 +26,8 @@ return new class extends Migration
             $table->dropColumn('call_id');
         });
 
-        DB::statement("ALTER TABLE messages MODIFY COLUMN type ENUM('text', 'image', 'audio', 'video', 'document', 'location', 'sticker', 'reaction', 'template', 'unsupported') NOT NULL DEFAULT 'text'");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE messages MODIFY COLUMN type ENUM('text', 'image', 'audio', 'video', 'document', 'location', 'sticker', 'reaction', 'template', 'unsupported') NOT NULL DEFAULT 'text'");
+        }
     }
 };

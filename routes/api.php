@@ -50,6 +50,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/messages/{messageId}/reaction', [ConversationController::class, 'reactToMessage']);
     Route::post('/conversations/{id}/request-location', [ConversationController::class, 'requestLocation']);
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
+    Route::post('/conversations/{id}/unread', [ConversationController::class, 'markAsUnread']);
     Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);
 
     // Stickers

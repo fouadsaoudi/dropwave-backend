@@ -810,6 +810,49 @@ class ConversationController extends Controller
     }
 
     /**
+     * Mark a conversation as unread (set unread_count to 1 if it is 0).
+     */
+    public function markAsUnread(Request $request, $id)
+    {
+        $conversation = Conversation::find($id);
+
+        if (!$conversation) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Conversation not found.'
+            ], 404);
+        }
+
+        $user = $request->user();
+        $tenant = $user ? $user->tenant : $conversation->tenant;
+        $isDelivery = $tenant && $tenant->type === 'delivery_coordination';
+        $isDriver = $this->isDriverConversation($conversation, $isDelivery);
+
+        if ($user && $user->isAgent() && !$isDriver && $conversation->assigned_to !== $user->id) {
+            return response()->json([
+                'error' => 'forbidden',
+                'message' => 'Unauthorized access to this conversation.'
+            ], 403);
+        }
+
+        // Set unread_count to at least 1 (if 0, set to 1)
+        $newUnreadCount = $conversation->unread_count > 0 ? $conversation->unread_count : 1;
+        $conversation->update(['unread_count' => $newUnreadCount]);
+
+        $relations = ['contact', 'channel', 'assignee'];
+        if ($isDelivery) {
+            $relations[] = 'contact.driver';
+        }
+        $conversation->load($relations);
+        broadcast(new \App\Events\ConversationUpdated($conversation));
+
+        return response()->json([
+            'message' => 'Conversation marked as unread.',
+            'conversation' => $conversation
+        ]);
+    }
+
+    /**
      * Send a template message to start a new chat or respond in an existing one.
      */
     public function sendTemplate(Request $request)

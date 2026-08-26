@@ -37,6 +37,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/channels/{id}/toggle-calling', [ChannelController::class, 'toggleCalling']);
     Route::get('/channels/{id}/settings', [ChannelController::class, 'getSettings']);
     Route::post('/channels/{id}/settings', [ChannelController::class, 'updateSettings']);
+    Route::post('/channels/{id}/preferences', [ChannelController::class, 'updatePreferences']);
 
     // Conversations
     Route::get('/conversations', [ConversationController::class, 'index']);
@@ -51,6 +52,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/conversations/{id}/request-location', [ConversationController::class, 'requestLocation']);
     Route::post('/conversations/{id}/read', [ConversationController::class, 'markAsRead']);
     Route::post('/conversations/{id}/unread', [ConversationController::class, 'markAsUnread']);
+    Route::post('/conversations/{id}/typing', [ConversationController::class, 'sendTypingIndicator']);
     Route::post('/conversations/send-template', [ConversationController::class, 'sendTemplate']);
 
     // Stickers

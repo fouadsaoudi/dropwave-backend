@@ -224,17 +224,25 @@ class MetaApiService
     }
 
     /**
-     * Mark a received message as read.
+     * Mark a received message as read, optionally displaying a typing indicator.
      */
-    public function markMessageAsRead(string $accessToken, string $phoneNumberId, string $messageId): array
+    public function markMessageAsRead(string $accessToken, string $phoneNumberId, string $messageId, bool $withTypingIndicator = false): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
-        $response = Http::withToken($accessToken)->post($url, [
+        $payload = [
             'messaging_product' => 'whatsapp',
             'status' => 'read',
             'message_id' => $messageId,
-        ]);
+        ];
+
+        if ($withTypingIndicator) {
+            $payload['typing_indicator'] = [
+                'type' => 'text',
+            ];
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
             Log::error("Failed to mark WhatsApp message {$messageId} as read via {$phoneNumberId}", [
@@ -245,6 +253,14 @@ class MetaApiService
         }
 
         return $response->json();
+    }
+
+    /**
+     * Display a typing indicator on WhatsApp for a received message.
+     */
+    public function sendTypingIndicator(string $accessToken, string $phoneNumberId, string $messageId): array
+    {
+        return $this->markMessageAsRead($accessToken, $phoneNumberId, $messageId, true);
     }
 
     /**

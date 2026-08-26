@@ -22,6 +22,7 @@ class WabaChannel extends Model
         'is_active',
         'is_primary',
         'calling_enabled',
+        'typing_indicator_enabled',
         'connected_at',
         'token_expires_at',
     ];
@@ -30,6 +31,7 @@ class WabaChannel extends Model
         'is_active' => 'boolean',
         'is_primary' => 'boolean',
         'calling_enabled' => 'boolean',
+        'typing_indicator_enabled' => 'boolean',
         'connected_at' => 'datetime',
         'token_expires_at' => 'datetime',
     ];

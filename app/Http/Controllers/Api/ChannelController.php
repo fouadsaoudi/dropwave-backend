@@ -189,6 +189,7 @@ class ChannelController extends Controller
                 'messaging_limit',
                 'is_primary',
                 'calling_enabled',
+                'typing_indicator_enabled',
                 'connected_at',
             ]);
 
@@ -244,6 +245,7 @@ class ChannelController extends Controller
                     'success' => true,
                     'channel_id' => $channel->id,
                     'calling_enabled' => $channel->calling_enabled,
+                    'typing_indicator_enabled' => (bool)($channel->typing_indicator_enabled ?? true),
                     'messaging_limit' => $channel->messaging_limit,
                     'quality_rating' => $channel->quality_rating,
                     'settings' => $metaData,
@@ -260,6 +262,7 @@ class ChannelController extends Controller
                 'success' => false,
                 'channel_id' => $channel->id,
                 'calling_enabled' => $channel->calling_enabled,
+                'typing_indicator_enabled' => (bool)($channel->typing_indicator_enabled ?? true),
                 'messaging_limit' => $channel->messaging_limit,
                 'quality_rating' => $channel->quality_rating,
                 'message' => $response->json('error.message') ?? 'Could not retrieve settings from Meta.',
@@ -427,6 +430,13 @@ class ChannelController extends Controller
                 }
             }
 
+            // 3. Update Typing Indicator Setting (local channel preference)
+            if ($request->has('typing_indicator_enabled')) {
+                $channel->update([
+                    'typing_indicator_enabled' => $request->boolean('typing_indicator_enabled')
+                ]);
+            }
+
             if (!empty($errors)) {
                 return response()->json([
                     'error' => 'partial_update_failed',
@@ -439,6 +449,7 @@ class ChannelController extends Controller
                 'success' => true,
                 'message' => 'Settings updated successfully.',
                 'calling_enabled' => $channel->calling_enabled,
+                'typing_indicator_enabled' => $channel->typing_indicator_enabled,
             ]);
 
         } catch (Exception $e) {
@@ -449,6 +460,30 @@ class ChannelController extends Controller
                 'message' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Update local channel preferences (e.g. typing indicator) without touching Meta VoIP endpoints.
+     */
+    public function updatePreferences(Request $request, $id)
+    {
+        $tenantId = $request->get('tenant_id');
+        $channel = WabaChannel::where('tenant_id', $tenantId)->findOrFail($id);
+
+        $validated = $request->validate([
+            'typing_indicator_enabled' => 'sometimes|boolean',
+        ]);
+
+        $channel->update($validated);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Channel preferences updated successfully.',
+            'channel' => [
+                'id' => $channel->id,
+                'typing_indicator_enabled' => $channel->typing_indicator_enabled,
+            ],
+        ]);
     }
 
     /**

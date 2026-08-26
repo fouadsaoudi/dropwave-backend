@@ -13,6 +13,7 @@ use App\Http\Requests\ReopenConversationRequest;
 use App\Http\Requests\SendMessageRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Exception;
 
@@ -784,14 +785,17 @@ class ConversationController extends Controller
             ->orderBy('created_at', 'desc')
             ->first();
 
+        $channel = $conversation->channel;
+        $withTyping = ($request->boolean('typing') || $request->boolean('show_typing')) && ($channel?->typing_indicator_enabled ?? true);
+
         if ($lastInboundMessage) {
-            $channel = $conversation->channel;
             if ($channel && $channel->decrypted_token) {
                 try {
                     $this->metaService->markMessageAsRead(
                         $channel->decrypted_token,
                         $channel->phone_number_id,
-                        $lastInboundMessage->whatsapp_msg_id
+                        $lastInboundMessage->whatsapp_msg_id,
+                        $withTyping
                     );
                 } catch (Exception $e) {
                     Log::warning("Failed to transmit WhatsApp read receipt to Meta for message {$lastInboundMessage->whatsapp_msg_id}: " . $e->getMessage());
@@ -824,6 +828,80 @@ class ConversationController extends Controller
             'message' => 'Conversation marked as read.',
             'conversation' => $conversation
         ]);
+    }
+
+    /**
+     * Send a typing indicator to the WhatsApp contact for the conversation.
+     */
+    public function sendTypingIndicator(Request $request, $id)
+    {
+        $conversation = Conversation::find($id);
+
+        if (!$conversation) {
+            return response()->json([
+                'error' => 'not_found',
+                'message' => 'Conversation not found.'
+            ], 404);
+        }
+
+        $channel = $conversation->channel;
+        if (!$channel || !$channel->decrypted_token || !$channel->phone_number_id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Channel credentials not available.'
+            ], 422);
+        }
+
+        // Check if typing indicator is disabled on channel settings
+        if (!$channel->typing_indicator_enabled) {
+            return response()->json([
+                'status' => 'disabled',
+                'message' => 'Typing indicator is disabled for this channel.'
+            ]);
+        }
+
+        // Debounce / throttle typing indicator calls (cooldown 15 seconds per conversation)
+        $cacheKey = "whatsapp_typing_indicator_{$conversation->id}";
+        if (Cache::has($cacheKey)) {
+            return response()->json([
+                'status' => 'throttled',
+                'message' => 'Typing indicator recently sent.'
+            ]);
+        }
+
+        // Find the latest inbound message that has a whatsapp_msg_id
+        $lastInboundMessage = Message::where('conversation_id', $conversation->id)
+            ->where('direction', 'inbound')
+            ->whereNotNull('whatsapp_msg_id')
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        if (!$lastInboundMessage) {
+            return response()->json([
+                'status' => 'ignored',
+                'message' => 'No inbound WhatsApp message found to associate typing indicator.'
+            ]);
+        }
+
+        try {
+            $this->metaService->sendTypingIndicator(
+                $channel->decrypted_token,
+                $channel->phone_number_id,
+                $lastInboundMessage->whatsapp_msg_id
+            );
+            Cache::put($cacheKey, true, now()->addSeconds(15));
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Typing indicator sent successfully.'
+            ]);
+        } catch (Exception $e) {
+            Log::warning("Failed to transmit WhatsApp typing indicator to Meta: " . $e->getMessage());
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to transmit typing indicator to Meta.'
+            ], 500);
+        }
     }
 
     /**

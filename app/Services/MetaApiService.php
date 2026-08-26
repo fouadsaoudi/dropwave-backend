@@ -598,6 +598,119 @@ class MetaApiService
     }
 
     /**
+     * Fetch conversation analytics from Meta Graph API for a WABA.
+     */
+    public function getConversationAnalytics(
+        string $wabaId,
+        string $accessToken,
+        int $startTimestamp,
+        int $endTimestamp,
+        string $granularity = 'MONTHLY',
+        array $phoneNumbers = [],
+        array $dimensions = ['CONVERSATION_CATEGORY', 'CONVERSATION_TYPE', 'PHONE', 'COUNTRY']
+    ): array {
+        $encodedPhoneNumbers = json_encode(array_values($phoneNumbers));
+        $encodedDimensions = json_encode(array_values($dimensions));
+
+        $fields = "conversation_analytics.start({$startTimestamp}).end({$endTimestamp}).granularity({$granularity}).phone_numbers({$encodedPhoneNumbers}).dimensions({$encodedDimensions})";
+
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}";
+
+        $response = Http::withToken($accessToken)
+            ->timeout(3)
+            ->connectTimeout(2)
+            ->get($url, [
+                'fields' => $fields,
+            ]);
+
+        if ($response->failed()) {
+            Log::warning("Failed to fetch conversation analytics for WABA {$wabaId}", [
+                'status' => $response->status(),
+                'response' => $response->json(),
+            ]);
+            $this->handleFailedResponse($response, "Fetch WABA conversation analytics for {$wabaId}", [
+                'waba_id' => $wabaId,
+            ]);
+        }
+
+        $data = $response->json();
+        return $data['conversation_analytics'] ?? $data ?? [];
+    }
+
+    /**
+     * Fetch template analytics (sent, delivered, read, clicked, cost) from Meta Graph API.
+     */
+    public function getTemplateAnalytics(
+        string $wabaId,
+        string $accessToken,
+        int $startTimestamp,
+        int $endTimestamp,
+        array $templateIds = [],
+        array $metricTypes = ['sent', 'delivered', 'read', 'clicked', 'cost']
+    ): array {
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}/template_analytics";
+
+        $queryParams = [
+            'start' => $startTimestamp,
+            'end' => $endTimestamp,
+            'granularity' => 'daily',
+            'metric_types' => implode(',', $metricTypes),
+        ];
+
+        if (!empty($templateIds)) {
+            $queryParams['template_ids'] = json_encode(array_values($templateIds));
+        }
+
+        $response = Http::withToken($accessToken)->get($url, $queryParams);
+
+        if ($response->failed()) {
+            Log::warning("Failed to fetch template analytics for WABA {$wabaId}", [
+                'status' => $response->status(),
+                'response' => $response->json(),
+            ]);
+            $this->handleFailedResponse($response, "Fetch WABA template analytics for {$wabaId}", [
+                'waba_id' => $wabaId,
+            ]);
+        }
+
+        return $response->json('data') ?? [];
+    }
+
+    /**
+     * Fetch pricing analytics from Meta Graph API for a WABA.
+     */
+    public function getPricingAnalytics(
+        string $wabaId,
+        string $accessToken,
+        int $startTimestamp,
+        int $endTimestamp,
+        string $granularity = 'MONTHLY',
+        array $dimensions = ['PRICING_CATEGORY', 'PRICING_TYPE', 'TIER', 'COUNTRY']
+    ): array {
+        $encodedDimensions = json_encode(array_values($dimensions));
+        $fields = "pricing_analytics.start({$startTimestamp}).end({$endTimestamp}).granularity({$granularity}).dimensions({$encodedDimensions})";
+
+        $url = "{$this->baseUrl}/{$this->version}/{$wabaId}";
+
+        $response = Http::withToken($accessToken)->get($url, [
+            'fields' => $fields,
+        ]);
+
+        if ($response->failed()) {
+            Log::warning("Failed to fetch pricing analytics for WABA {$wabaId}", [
+                'status' => $response->status(),
+                'response' => $response->json(),
+            ]);
+            $this->handleFailedResponse($response, "Fetch WABA pricing analytics for {$wabaId}", [
+                'waba_id' => $wabaId,
+            ]);
+        }
+
+        $data = $response->json();
+        return $data['pricing_analytics'] ?? $data ?? [];
+    }
+
+    /**
      * Handle, log, and throw an enriched exception for failed Meta API responses.
      */
     protected function handleFailedResponse($response, string $actionDescription, array $extraContext = []): void

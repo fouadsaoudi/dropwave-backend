@@ -10,6 +10,7 @@ use App\Models\Conversation;
 use App\Models\Tenant;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use App\Models\TenantBillingSnapshot;
 use App\Services\TenantBillingService;
 
 class DashboardController extends Controller
@@ -100,19 +101,45 @@ class DashboardController extends Controller
 
         $currentBilling = $billingService->getMonthlySnapshotSummary($tenant, Carbon::now());
 
-        // Compile historical list of past 6 months (including the current month)
+        // Fast compilation of historical 6 months using a single indexed query
+        $sixMonthsAgo = Carbon::now()->subMonths(5)->startOfMonth();
+        $snapshots = TenantBillingSnapshot::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('billing_month', '>=', $sixMonthsAgo->toDateString())
+            ->get()
+            ->keyBy(fn ($s) => Carbon::parse($s->billing_month)->format('Y-m'));
+
         $history = [];
         for ($i = 0; $i < 6; $i++) {
             $month = Carbon::now()->subMonths($i);
-            $billingData = $billingService->getMonthlySnapshotSummary($tenant, $month);
-            
-            $history[] = [
-                'month_name' => $month->format('F Y'),
-                'month_key' => $month->format('Y-m'),
-                'conversation_sessions_count' => $billingData['conversation_sessions_count'],
-                'free_tier_remaining' => $billingData['free_tier_remaining'],
-                'total_estimated_cost' => $billingData['total_estimated_cost'],
-            ];
+            $monthKey = $month->format('Y-m');
+            $snapshot = $snapshots->get($monthKey);
+
+            if ($snapshot) {
+                $history[] = [
+                    'month_name' => $month->format('F Y'),
+                    'month_key' => $monthKey,
+                    'conversation_sessions_count' => (int) $snapshot->conversation_sessions_count,
+                    'free_tier_remaining' => (int) $snapshot->free_tier_remaining,
+                    'total_estimated_cost' => number_format((float) $snapshot->total_estimated_cost, 4, '.', ''),
+                ];
+            } elseif ($month->isCurrentMonth()) {
+                $history[] = [
+                    'month_name' => $month->format('F Y'),
+                    'month_key' => $monthKey,
+                    'conversation_sessions_count' => (int) ($currentBilling['conversation_sessions_count'] ?? 0),
+                    'free_tier_remaining' => (int) ($currentBilling['free_tier_remaining'] ?? 1000),
+                    'total_estimated_cost' => (string) ($currentBilling['total_estimated_cost'] ?? '0.0000'),
+                ];
+            } else {
+                $history[] = [
+                    'month_name' => $month->format('F Y'),
+                    'month_key' => $monthKey,
+                    'conversation_sessions_count' => 0,
+                    'free_tier_remaining' => 1000,
+                    'total_estimated_cost' => '0.0000',
+                ];
+            }
         }
 
         $deliveryStats = null;

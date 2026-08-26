@@ -113,23 +113,26 @@ class AdminController extends Controller
             ->selectRaw("
                 COALESCE(SUM(total_estimated_cost), 0) as total_agent_billing,
                 COALESCE(SUM(meta_total_estimated_cost), 0) as total_meta_billing,
-                COALESCE(SUM(meta_template_cost_total), 0) as total_real_meta_billing,
+                COALESCE(SUM(meta_template_cost_total), 0) as total_meta_template_billing,
+                COALESCE(SUM(meta_billable_conversation_cost), 0) as total_meta_conversation_billing,
                 COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN amount_paid ELSE 0 END), 0) as total_paid_revenue,
                 COALESCE(SUM(CASE WHEN payment_status != 'paid' OR payment_status IS NULL THEN total_estimated_cost ELSE 0 END), 0) as total_unpaid_revenue,
                 COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END), 0) as paid_tenants_count,
-                COALESCE(SUM(CASE WHEN payment_status != 'paid' OR payment_status IS NULL THEN 1 ELSE 0 END), 0) as unpaid_tenants_count
+                COALESCE(SUM(CASE WHEN payment_status != 'paid' OR payment_status IS NULL THEN 1 ELSE 0 END), 0) as unpaid_tenants_count,
+                COALESCE(SUM(CASE WHEN is_approximate = 0 THEN 1 ELSE 0 END), 0) as meta_verified_snapshots_count
             ")
             ->first();
 
         $totalAgentBilling = (float) ($billingTotals->total_agent_billing ?? 0);
         $totalMetaBilling = (float) ($billingTotals->total_meta_billing ?? 0);
-        $totalRealMetaBilling = (float) ($billingTotals->total_real_meta_billing ?? 0);
         $totalPaidRevenue = (float) ($billingTotals->total_paid_revenue ?? 0);
         $totalUnpaidRevenue = (float) ($billingTotals->total_unpaid_revenue ?? 0);
         $paidTenantsCount = (int) ($billingTotals->paid_tenants_count ?? 0);
         $unpaidTenantsCount = (int) ($billingTotals->unpaid_tenants_count ?? 0);
+        $metaVerifiedCount = (int) ($billingTotals->meta_verified_snapshots_count ?? 0);
         
-        $totalProfit = $totalAgentBilling - $totalRealMetaBilling;
+        $totalProfit = $totalAgentBilling - $totalMetaBilling;
+        $profitMarginPercent = $totalAgentBilling > 0 ? round(($totalProfit / $totalAgentBilling) * 100, 1) : 0;
 
         return response()->json([
             'tenants_count' => $tenantCount,
@@ -142,10 +145,12 @@ class AdminController extends Controller
             'current_month_agent_expenses' => number_format($totalAgentBilling, 4, '.', ''),
             'current_month_meta_expenses' => number_format($totalMetaBilling, 4, '.', ''),
             'current_month_profit' => number_format($totalProfit, 4, '.', ''),
+            'current_month_profit_margin_percent' => $profitMarginPercent,
             'current_month_paid_revenue' => number_format($totalPaidRevenue, 4, '.', ''),
             'current_month_unpaid_revenue' => number_format($totalUnpaidRevenue, 4, '.', ''),
             'paid_tenants_count' => $paidTenantsCount,
             'unpaid_tenants_count' => $unpaidTenantsCount,
+            'meta_verified_snapshots_count' => $metaVerifiedCount,
         ]);
     }
 

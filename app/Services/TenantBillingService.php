@@ -9,13 +9,22 @@ use App\Models\Tenant;
 use App\Models\TenantBillingSnapshot;
 use App\Models\WabaChannel;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
 
 class TenantBillingService
 {
     public const FREE_TIER_LIMIT = 0;
     public const BILLABLE_WINDOW_RATE = '0.015';
+
+    protected MetaApiService $metaApiService;
+
+    public function __construct(?MetaApiService $metaApiService = null)
+    {
+        $this->metaApiService = $metaApiService ?? app(MetaApiService::class);
+    }
 
     public function getMonthlySnapshotSummary(Tenant $tenant, Carbon $month, bool $forceFresh = false): array
     {
@@ -77,6 +86,9 @@ class TenantBillingService
             'meta_total_estimated_cost' => $summary['meta_total_estimated_cost'],
             'meta_template_breakdown' => $summary['meta_template_breakdown'],
             'channels_breakdown' => $summary['channels_breakdown'] ?? [],
+            'call_cost_total' => $summary['call_cost_total'] ?? 0.0000,
+            'meta_call_cost_total' => $summary['meta_call_cost_total'] ?? 0.0000,
+            'calls_breakdown' => $summary['calls_breakdown'] ?? [],
         ];
 
         if ($existing) {
@@ -109,7 +121,7 @@ class TenantBillingService
         // Resolve active tenant channels
         $channels = WabaChannel::withoutGlobalScopes()
             ->where('tenant_id', $tenant->id)
-            ->get(['id', 'display_name', 'phone_number']);
+            ->get(['id', 'display_name', 'phone_number', 'phone_number_id', 'waba_id', 'access_token', 'is_active']);
 
         $channelMap = [];
         foreach ($channels as $ch) {
@@ -125,7 +137,115 @@ class TenantBillingService
                 'meta_billable_conversation_cost' => '0.0000',
                 'meta_template_cost_total' => '0.0000',
                 'meta_total_estimated_cost' => '0.0000',
+                'meta_verified' => false,
+                'meta_free_tier_count' => 0,
+                'meta_free_entry_point_count' => 0,
+                'meta_regular_count' => 0,
             ];
+        }
+
+        // 1. Attempt to fetch real Meta conversation analytics for active channels
+        $metaAnalyticsFound = false;
+        $metaTotalConversations = 0;
+        $metaRegularConversations = 0;
+        $metaFreeTierConversations = 0;
+        $metaFreeEntryPointConversations = 0;
+        $metaRealCostTotal = 0.0;
+        $metaCategoryBreakdown = [
+            'marketing' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAdminBillingCostForCategory('MARKETING')],
+            'utility' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAdminBillingCostForCategory('UTILITY')],
+            'authentication' => ['count' => 0, 'cost' => '0.0000', 'rate' => MessageTemplate::defaultAdminBillingCostForCategory('AUTHENTICATION')],
+            'service' => ['count' => 0, 'cost' => '0.0000', 'rate' => '0.0000'],
+            'other' => ['count' => 0, 'cost' => '0.0000', 'rate' => '0.0000'],
+        ];
+
+        foreach ($channels as $ch) {
+            $rawToken = $ch->getRawOriginal('access_token');
+            if (!$ch->waba_id || empty($rawToken)) {
+                continue;
+            }
+
+            try {
+                $token = $ch->decrypted_token;
+            } catch (\Throwable $e) {
+                $token = $rawToken;
+            }
+
+            if (empty($token)) {
+                continue;
+            }
+
+            try {
+                $cacheKey = "meta_conv_analytics_{$ch->waba_id}_" . $periodStart->format('Y_m');
+                $metaResponse = Cache::remember($cacheKey, 300, function () use ($ch, $token, $periodStart, $periodEnd) {
+                    $phoneNumbers = $ch->phone_number ? [$ch->phone_number] : [];
+                    return $this->metaApiService->getConversationAnalytics(
+                        $ch->waba_id,
+                        $token,
+                        $periodStart->timestamp,
+                        $periodEnd->timestamp,
+                        'MONTHLY',
+                        $phoneNumbers,
+                        ['CONVERSATION_CATEGORY', 'CONVERSATION_TYPE', 'PHONE']
+                    );
+                });
+
+                $dataPoints = $metaResponse['data'][0]['data_points'] ?? $metaResponse['data_points'] ?? [];
+                if (!empty($dataPoints)) {
+                    $metaAnalyticsFound = true;
+                    $chId = (int) $ch->id;
+                    $channelMap[$chId]['meta_verified'] = true;
+
+                    foreach ($dataPoints as $dp) {
+                        $count = (int) ($dp['conversation'] ?? 0);
+                        $cost = (float) ($dp['cost'] ?? 0);
+                        $cat = strtolower((string) ($dp['conversation_category'] ?? 'other'));
+                        $type = strtoupper((string) ($dp['conversation_type'] ?? 'REGULAR'));
+
+                        $metaTotalConversations += $count;
+                        $metaRealCostTotal += $cost;
+
+                        if ($type === 'FREE_TIER') {
+                            $metaFreeTierConversations += $count;
+                            $channelMap[$chId]['meta_free_tier_count'] += $count;
+                        } elseif ($type === 'FREE_ENTRY_POINT') {
+                            $metaFreeEntryPointConversations += $count;
+                            $channelMap[$chId]['meta_free_entry_point_count'] += $count;
+                        } else {
+                            $metaRegularConversations += $count;
+                            $channelMap[$chId]['meta_regular_count'] += $count;
+                        }
+
+                        $channelMap[$chId]['conversation_sessions_count'] += $count;
+                        $channelMap[$chId]['meta_billable_conversation_cost'] = number_format(
+                            (float) $channelMap[$chId]['meta_billable_conversation_cost'] + $cost,
+                            4,
+                            '.',
+                            ''
+                        );
+
+                        if (isset($metaCategoryBreakdown[$cat])) {
+                            $metaCategoryBreakdown[$cat]['count'] += $count;
+                            $metaCategoryBreakdown[$cat]['cost'] = number_format(
+                                (float) $metaCategoryBreakdown[$cat]['cost'] + $cost,
+                                4,
+                                '.',
+                                ''
+                            );
+                        } else {
+                            $metaCategoryBreakdown['other']['count'] += $count;
+                            $metaCategoryBreakdown['other']['cost'] = number_format(
+                                (float) $metaCategoryBreakdown['other']['cost'] + $cost,
+                                4,
+                                '.',
+                                ''
+                            );
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::info("Meta conversation analytics not available for channel {$ch->id} ({$ch->display_name}): " . $e->getMessage());
+            }
         }
 
         // Map conversations to channel_id
@@ -190,7 +310,7 @@ class TenantBillingService
             'other' => ['count' => 0, 'cost' => '0.0000', 'rate' => '0.0000'],
         ];
 
-        $conversationSessions = 0;
+        $localConversationSessions = 0;
         $billableWindowRate = number_format((float) self::BILLABLE_WINDOW_RATE, 4, '.', '');
         $templateCostTotal = '0.0000';
         $metaTemplateCostTotal = '0.0000';
@@ -202,10 +322,10 @@ class TenantBillingService
             $windowStart = $windowStartByConversation[$conversationId] ?? null;
 
             if (!$windowStart || $sentAt->greaterThanOrEqualTo($windowStart->copy()->addHours(24))) {
-                $conversationSessions++;
+                $localConversationSessions++;
                 $windowStartByConversation[$conversationId] = $sentAt;
 
-                if ($channelId && isset($channelMap[$channelId])) {
+                if (!$metaAnalyticsFound && $channelId && isset($channelMap[$channelId])) {
                     $channelMap[$channelId]['conversation_sessions_count']++;
                 }
             }
@@ -360,12 +480,33 @@ class TenantBillingService
             }
         }
 
+        // Determine final conversation counts & costs based on whether Meta API was available
+        if ($metaAnalyticsFound) {
+            $conversationSessions = $metaTotalConversations;
+            $billableConversations = $metaRegularConversations;
+            $freeTierRemaining = max(0, 1000 - $metaFreeTierConversations);
+            $billableConversationCost = number_format($billableConversations * (float) $billableWindowRate, 4, '.', '');
+            $metaBillableConversationCost = number_format($metaRealCostTotal, 4, '.', '');
+            $metaBillableWindowRate = number_format(0.01, 4, '.', '');
+            $isApproximate = false;
+        } else {
+            $conversationSessions = $localConversationSessions;
+            $freeTierRemaining = max(0, 1000 - $conversationSessions);
+            $billableConversations = $conversationSessions;
+            $billableConversationCost = number_format($billableConversations * (float) $billableWindowRate, 4, '.', '');
+            $metaBillableWindowRate = number_format(0.01, 4, '.', '');
+            $metaBillableConversationCost = number_format($conversationSessions * 0.01, 4, '.', '');
+            $isApproximate = true;
+        }
+
         // Format per-channel breakdown metrics
         foreach ($channelMap as $cId => &$cData) {
             $cSessions = (int) $cData['conversation_sessions_count'];
-            $cData['billable_conversations_count'] = $cSessions;
-            $cData['billable_conversation_cost'] = number_format($cSessions * (float) $billableWindowRate, 4, '.', '');
-            $cData['meta_billable_conversation_cost'] = number_format($cSessions * 0.01, 4, '.', '');
+            $cData['billable_conversations_count'] = $cData['meta_verified'] ? (int) $cData['meta_regular_count'] : $cSessions;
+            $cData['billable_conversation_cost'] = number_format($cData['billable_conversations_count'] * (float) $billableWindowRate, 4, '.', '');
+            if (!$cData['meta_verified']) {
+                $cData['meta_billable_conversation_cost'] = number_format($cSessions * 0.01, 4, '.', '');
+            }
 
             // Add default call properties to channel data if not already set
             if (!isset($cData['call_cost_total'])) {
@@ -390,15 +531,7 @@ class TenantBillingService
         }
         unset($cData);
 
-        $freeTierRemaining = max(0, self::FREE_TIER_LIMIT - $conversationSessions);
-        $billableConversations = max(0, $conversationSessions - self::FREE_TIER_LIMIT);
-        $billableConversationCost = number_format($billableConversations * (float) $billableWindowRate, 4, '.', '');
-        
         $totalEstimatedCost = number_format((float) $templateCostTotal + (float) $billableConversationCost + $callCostTotal, 4, '.', '');
-
-        // Meta (Facebook) actual expenses
-        $metaBillableWindowRate = number_format(0.01, 4, '.', '');
-        $metaBillableConversationCost = number_format($conversationSessions * 0.01, 4, '.', '');
         $metaTotalEstimatedCost = number_format((float) $metaTemplateCostTotal + (float) $metaBillableConversationCost + $metaCallCostTotal, 4, '.', '');
 
         return [
@@ -414,7 +547,7 @@ class TenantBillingService
             'template_cost_total' => $templateCostTotal,
             'call_cost_total' => number_format($callCostTotal, 4, '.', ''),
             'total_estimated_cost' => $totalEstimatedCost,
-            'is_approximate' => true,
+            'is_approximate' => $isApproximate,
             'template_breakdown' => $templateBreakdown,
             'calculated_at' => now()->toDateTimeString(),
 
@@ -423,7 +556,11 @@ class TenantBillingService
             'meta_template_cost_total' => $metaTemplateCostTotal,
             'meta_call_cost_total' => number_format($metaCallCostTotal, 4, '.', ''),
             'meta_total_estimated_cost' => $metaTotalEstimatedCost,
-            'meta_template_breakdown' => $metaTemplateBreakdown,
+            'meta_template_breakdown' => $metaAnalyticsFound ? array_merge($metaTemplateBreakdown, $metaCategoryBreakdown) : $metaTemplateBreakdown,
+            'meta_analytics_synced' => $metaAnalyticsFound,
+            'meta_free_tier_conversations' => $metaFreeTierConversations,
+            'meta_free_entry_point_conversations' => $metaFreeEntryPointConversations,
+            'meta_regular_conversations' => $metaRegularConversations,
             'calls_breakdown' => $callsBreakdown,
             'channels_breakdown' => array_values($channelMap),
             'channels_count' => count($channelMap),
@@ -459,6 +596,9 @@ class TenantBillingService
             'meta_call_cost_total' => number_format((float) ($snapshot->meta_call_cost_total ?? 0.0000), 4, '.', ''),
             'meta_total_estimated_cost' => number_format((float) ($snapshot->meta_total_estimated_cost ?? 0.0000), 4, '.', ''),
             'meta_template_breakdown' => $snapshot->meta_template_breakdown ?? [],
+            'meta_analytics_synced' => !((bool) $snapshot->is_approximate),
+            'meta_free_tier_conversations' => $snapshot->meta_template_breakdown['free_tier_count'] ?? 0,
+            'meta_regular_conversations' => $snapshot->billable_conversations_count ?? 0,
             'calls_breakdown' => $snapshot->calls_breakdown ?? [],
             'channels_breakdown' => $snapshot->channels_breakdown ?? [],
             'channels_count' => is_array($snapshot->channels_breakdown) ? count($snapshot->channels_breakdown) : 0,

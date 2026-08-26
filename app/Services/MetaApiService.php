@@ -329,11 +329,12 @@ class MetaApiService
     public function uploadMedia(string $accessToken, string $phoneNumberId, string $filePath, string $mimeType): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/media";
-        // Meta's multipart `type` field accepts a media type, not MIME
-        // parameters. In particular, sending `audio/ogg; codecs=opus` causes
-        // Meta to process the upload as application/octet-stream even when the
-        // OGG file itself is a valid Opus stream.
-        $uploadMimeType = trim(explode(';', $mimeType, 2)[0]);
+        
+        // For OGG Opus voice notes, WhatsApp Cloud API requires exact MIME type 'audio/ogg; codecs=opus'
+        $uploadMimeType = trim($mimeType);
+        if ($uploadMimeType === 'audio/ogg' || str_starts_with($uploadMimeType, 'audio/ogg')) {
+            $uploadMimeType = 'audio/ogg; codecs=opus';
+        }
 
         $response = Http::withToken($accessToken)
             ->attach('file', file_get_contents($filePath), basename($filePath), [

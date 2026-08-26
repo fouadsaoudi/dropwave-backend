@@ -494,7 +494,7 @@ class ConversationController extends Controller
 
                 if (!$isInternal) {
                     // Transcode recorded/voice-note audio to OGG/Opus so WhatsApp displays it natively as a playable voice note waveform
-                    if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg']))) {
+                    if ($msgType === 'audio' && (str_contains($mediaFilename, 'voice_record') || in_array($extension, ['webm', 'mp4', 'm4a', 'ogg', 'wav', 'aac']))) {
                         $tempTranscodedFilename = uniqid() . '.ogg';
                         $tempTranscodedRelativePath = 'temp/' . $tempTranscodedFilename;
                         $absoluteTranscodedPath = \Illuminate\Support\Facades\Storage::disk('public')->path($tempTranscodedRelativePath);
@@ -503,11 +503,13 @@ class ConversationController extends Controller
                             'ffmpeg', '-y', '-i', $absolutePath,
                             '-map', '0:a:0',
                             '-vn',
-                            '-af', 'aresample=async=1:first_pts=0',
                             '-c:a', 'libopus',
-                            '-b:a', '64k',
+                            '-b:a', '32k',
+                            '-ar', '48000',
                             '-ac', '1',
+                            '-af', 'aresample=async=1:first_pts=0',
                             '-application', 'voip',
+                            '-map_metadata', '-1',
                             '-f', 'ogg',
                             $absoluteTranscodedPath
                         ]);
@@ -517,8 +519,8 @@ class ConversationController extends Controller
                             
                             $storedTempPath = $tempTranscodedRelativePath;
                             $absolutePath = $absoluteTranscodedPath;
-                            $mediaMimeType = 'audio/ogg';
-                            $metaUploadMimeType = 'audio/ogg';
+                            $mediaMimeType = 'audio/ogg; codecs=opus';
+                            $metaUploadMimeType = 'audio/ogg; codecs=opus';
                             $mediaFilename = 'voice_record.ogg';
                             $extension = 'ogg';
                         } else {

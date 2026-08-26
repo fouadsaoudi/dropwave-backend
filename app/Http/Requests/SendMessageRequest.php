@@ -23,6 +23,7 @@ class SendMessageRequest extends FormRequest
             'body' => 'required_without:file|nullable|string|max:4000',
             'file' => 'required_without:body|nullable|file|mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,jpeg,jpg,png,webp,aac,mp3,m4a,amr,ogg,opus,webm,mp4,3gp|max:16384', // max 16MB
             'is_internal' => 'nullable|boolean',
+            'reply_to_message_id' => 'nullable|integer|exists:messages,id',
         ];
     }
 }

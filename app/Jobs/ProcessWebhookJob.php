@@ -589,6 +589,17 @@ class ProcessWebhookJob implements ShouldQueue
                 }
             }
 
+            $contextWhatsappMsgId = $msg['context']['id'] ?? null;
+            $replyToMessageId = null;
+
+            if ($contextWhatsappMsgId) {
+                $replyToMessage = Message::withoutGlobalScopes()
+                    ->where('whatsapp_msg_id', $contextWhatsappMsgId)
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->first();
+                $replyToMessageId = $replyToMessage?->id;
+            }
+
             $message = Message::withoutGlobalScopes()->create([
                 'tenant_id' => $channel->tenant_id,
                 'conversation_id' => $conversation->id,
@@ -601,6 +612,8 @@ class ProcessWebhookJob implements ShouldQueue
                 'latitude' => $lat,
                 'longitude' => $lng,
                 'whatsapp_msg_id' => $msgId,
+                'reply_to_msg_id' => $replyToMessageId,
+                'reply_to_whatsapp_msg_id' => $contextWhatsappMsgId,
                 'status' => 'delivered', // Incoming is delivered to us
                 'sent_at' => $timestamp,
             ]);
@@ -620,7 +633,8 @@ class ProcessWebhookJob implements ShouldQueue
                 ]);
             }
 
-            // Broadcast Echo/Reverb events
+            // Load relations and Broadcast Echo/Reverb events
+            $message->load(['sender', 'reactions.sender', 'replyTo.sender']);
             broadcast(new \App\Events\MessageBroadcasted($message));
             broadcast(new \App\Events\ConversationUpdated($conversation));
 

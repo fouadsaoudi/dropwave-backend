@@ -111,11 +111,11 @@ class MetaApiService
     /**
      * Send a free-text message to a WhatsApp number.
      */
-    public function sendTextMessage(string $accessToken, string $phoneNumberId, string $to, string $body): array
+    public function sendTextMessage(string $accessToken, string $phoneNumberId, string $to, string $body, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
-        $response = Http::withToken($accessToken)->post($url, [
+        $payload = [
             'messaging_product' => 'whatsapp',
             'recipient_type' => 'individual',
             'to' => $to,
@@ -124,7 +124,15 @@ class MetaApiService
                 'preview_url' => false,
                 'body' => $body,
             ]
-        ]);
+        ];
+
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
             $this->handleFailedResponse($response, "Send WhatsApp text message to {$to}", [
@@ -334,7 +342,7 @@ class MetaApiService
     /**
      * Send an image message using a Meta media ID.
      */
-    public function sendImageMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $caption = null): array
+    public function sendImageMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $caption = null, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
@@ -352,6 +360,12 @@ class MetaApiService
             $payload['image']['caption'] = $caption;
         }
 
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
@@ -367,7 +381,7 @@ class MetaApiService
     /**
      * Send a document message using a Meta media ID.
      */
-    public function sendDocumentMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, string $filename, ?string $caption = null): array
+    public function sendDocumentMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, string $filename, ?string $caption = null, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
@@ -386,6 +400,12 @@ class MetaApiService
             $payload['document']['caption'] = $caption;
         }
 
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
@@ -402,7 +422,7 @@ class MetaApiService
     /**
      * Send a video message using a Meta media ID.
      */
-    public function sendVideoMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $caption = null): array
+    public function sendVideoMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $caption = null, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
@@ -420,6 +440,12 @@ class MetaApiService
             $payload['video']['caption'] = $caption;
         }
 
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
@@ -435,7 +461,7 @@ class MetaApiService
     /**
      * Send an audio message using a Meta media ID.
      */
-    public function sendAudioMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, bool $isVoiceMessage = false): array
+    public function sendAudioMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, bool $isVoiceMessage = false, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
@@ -455,6 +481,12 @@ class MetaApiService
             $payload['audio']['voice'] = true;
         }
 
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
@@ -471,7 +503,7 @@ class MetaApiService
     /**
      * Send a sticker message using a Meta media ID.
      */
-    public function sendStickerMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId): array
+    public function sendStickerMessage(string $accessToken, string $phoneNumberId, string $to, string $mediaId, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
@@ -484,6 +516,12 @@ class MetaApiService
                 'id' => $mediaId
             ]
         ];
+
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
 
         $response = Http::withToken($accessToken)->post($url, $payload);
 
@@ -500,11 +538,11 @@ class MetaApiService
     /**
      * Send a location request message to a WhatsApp number.
      */
-    public function sendLocationRequestMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText): array
+    public function sendLocationRequestMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText, ?string $contextMessageId = null): array
     {
         $url = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
-        $response = Http::withToken($accessToken)->post($url, [
+        $payload = [
             'messaging_product' => 'whatsapp',
             'recipient_type' => 'individual',
             'to' => $to,
@@ -518,7 +556,15 @@ class MetaApiService
                     'name' => 'send_location',
                 ]
             ]
-        ]);
+        ];
+
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
             $this->handleFailedResponse($response, "Send WhatsApp location request via {$phoneNumberId} to {$to}", [
@@ -532,11 +578,11 @@ class MetaApiService
     /**
      * Send an interactive CTA URL button message to a WhatsApp number.
      */
-    public function sendCtaUrlMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText, string $buttonText, string $url): array
+    public function sendCtaUrlMessage(string $accessToken, string $phoneNumberId, string $to, string $bodyText, string $buttonText, string $url, ?string $contextMessageId = null): array
     {
         $urlEndpoint = "{$this->baseUrl}/{$this->version}/{$phoneNumberId}/messages";
 
-        $response = Http::withToken($accessToken)->post($urlEndpoint, [
+        $payload = [
             'messaging_product' => 'whatsapp',
             'recipient_type' => 'individual',
             'to' => $to,
@@ -554,7 +600,15 @@ class MetaApiService
                     ]
                 ]
             ]
-        ]);
+        ];
+
+        if (!empty($contextMessageId)) {
+            $payload['context'] = [
+                'message_id' => $contextMessageId,
+            ];
+        }
+
+        $response = Http::withToken($accessToken)->post($urlEndpoint, $payload);
 
         if ($response->failed()) {
             $this->handleFailedResponse($response, "Send WhatsApp CTA URL message via {$phoneNumberId} to {$to}", [

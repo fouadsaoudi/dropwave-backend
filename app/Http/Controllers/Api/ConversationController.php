@@ -203,7 +203,7 @@ class ConversationController extends Controller
             ], 403);
         }
 
-        $query = Message::with(['sender', 'reactions.sender'])
+        $query = Message::with(['sender', 'reactions.sender', 'replyTo.sender'])
             ->where('conversation_id', $id)
             ->where('type', '!=', 'reaction');
 
@@ -439,6 +439,15 @@ class ConversationController extends Controller
         $msgType = 'text';
         $isVoiceMessage = false;
 
+        $replyToMessageId = $request->input('reply_to_message_id');
+        $replyToMsg = null;
+        $contextWhatsappMsgId = null;
+
+        if ($replyToMessageId) {
+            $replyToMsg = Message::where('conversation_id', $conversation->id)->find($replyToMessageId);
+            $contextWhatsappMsgId = $replyToMsg?->whatsapp_msg_id;
+        }
+
         try {
             if ($hasFile) {
                 $file = $request->file('file');
@@ -519,19 +528,14 @@ class ConversationController extends Controller
                             ]);
                         }
                     }
-                }
 
-                // Upload the final file to the target storage disk (public or S3)
-                $finalFilename = uniqid() . '.' . $extension;
-                if ($mediaFilename === 'voice_record.ogg') {
-                    $finalFilename = 'voice_record_' . uniqid() . '.ogg';
-                }
-                $storedPath = 'conversations/' . $conversation->id . '/' . $finalFilename;
-                
-                \Illuminate\Support\Facades\Storage::disk($disk)->put($storedPath, file_get_contents($absolutePath));
-                $mediaPath = 'storage/' . $storedPath;
+                    // 1. Move permanent file from local temp to target storage disk
+                    $uniqueId = \Illuminate\Support\Str::uuid()->toString();
+                    $storedPath = "messages/{$conversation->id}/{$uniqueId}.{$extension}";
+                    
+                    \Illuminate\Support\Facades\Storage::disk($disk)->put($storedPath, file_get_contents($absolutePath));
+                    $mediaPath = 'storage/' . $storedPath;
 
-                if (!$isInternal) {
                     // 2.a. Upload media to Meta
                     $uploadResponse = $this->metaService->uploadMedia(
                         $channel->decrypted_token,
@@ -552,14 +556,16 @@ class ConversationController extends Controller
                             $channel->phone_number_id,
                             $contact->phone_number,
                             $metaMediaId,
-                            $request->body // caption
+                            $request->body, // caption
+                            $contextWhatsappMsgId
                         );
                     } elseif ($msgType === 'sticker') {
                         $metaResponse = $this->metaService->sendStickerMessage(
                             $channel->decrypted_token,
                             $channel->phone_number_id,
                             $contact->phone_number,
-                            $metaMediaId
+                            $metaMediaId,
+                            $contextWhatsappMsgId
                         );
                     } elseif ($msgType === 'video') {
                         $metaResponse = $this->metaService->sendVideoMessage(
@@ -567,7 +573,8 @@ class ConversationController extends Controller
                             $channel->phone_number_id,
                             $contact->phone_number,
                             $metaMediaId,
-                            $request->body // caption
+                            $request->body, // caption
+                            $contextWhatsappMsgId
                         );
                     } elseif ($msgType === 'audio') {
                         $metaResponse = $this->metaService->sendAudioMessage(
@@ -575,7 +582,8 @@ class ConversationController extends Controller
                             $channel->phone_number_id,
                             $contact->phone_number,
                             $metaMediaId,
-                            $isVoiceMessage
+                            $isVoiceMessage,
+                            $contextWhatsappMsgId
                         );
                     } else {
                         $metaResponse = $this->metaService->sendDocumentMessage(
@@ -584,11 +592,17 @@ class ConversationController extends Controller
                             $contact->phone_number,
                             $metaMediaId,
                             $mediaFilename,
-                            $request->body // caption
+                            $request->body, // caption
+                            $contextWhatsappMsgId
                         );
                     }
                     
                     $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
+                } else {
+                    $uniqueId = \Illuminate\Support\Str::uuid()->toString();
+                    $storedPath = "messages/{$conversation->id}/{$uniqueId}.{$extension}";
+                    \Illuminate\Support\Facades\Storage::disk($disk)->put($storedPath, file_get_contents($absolutePath));
+                    $mediaPath = 'storage/' . $storedPath;
                 }
 
                 // Clean up the local temp file after uploading to target disk and sending to Meta
@@ -602,7 +616,8 @@ class ConversationController extends Controller
                         $channel->decrypted_token,
                         $channel->phone_number_id,
                         $contact->phone_number,
-                        $request->body
+                        $request->body,
+                        $contextWhatsappMsgId
                     );
 
                     $whatsappMsgId = $metaResponse['messages'][0]['id'] ?? null;
@@ -620,6 +635,8 @@ class ConversationController extends Controller
                 'media_mime_type' => $mediaMimeType,
                 'media_filename' => $mediaFilename,
                 'whatsapp_msg_id' => $whatsappMsgId,
+                'reply_to_msg_id' => $replyToMsg?->id,
+                'reply_to_whatsapp_msg_id' => $contextWhatsappMsgId,
                 'is_internal' => $isInternal,
                 'status' => 'sent',
                 'sent_by' => Auth::id(),
@@ -645,8 +662,8 @@ class ConversationController extends Controller
                 'last_message_at' => now(),
             ]);
 
-            // Load sender relationship to broadcast it
-            $message->load('sender');
+            // Load sender and replyTo relationships to broadcast
+            $message->load(['sender', 'reactions.sender', 'replyTo.sender']);
 
             // 5. Broadcast message & conversation updates
             broadcast(new \App\Events\MessageBroadcasted($message));

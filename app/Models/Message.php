@@ -26,6 +26,8 @@ class Message extends Model
         'template_id',
         'reaction_emoji',
         'reaction_to_msg_id',
+        'reply_to_msg_id',
+        'reply_to_whatsapp_msg_id',
         'whatsapp_msg_id',
         'is_internal',
         'is_edited',
@@ -93,5 +95,15 @@ class Message extends Model
     public function reactions(): HasMany
     {
         return $this->hasMany(Message::class, 'reaction_to_msg_id');
+    }
+
+    public function replyTo(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'reply_to_msg_id');
+    }
+
+    public function replies(): HasMany
+    {
+        return $this->hasMany(Message::class, 'reply_to_msg_id');
     }
 }

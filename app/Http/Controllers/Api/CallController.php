@@ -337,4 +337,49 @@ class CallController extends Controller
             'call' => $call,
         ]);
     }
+
+    /**
+     * Generate dynamic short-lived COTURN WebRTC credentials.
+     */
+    public function getCredentials(Request $request)
+    {
+        $turnHost = env('TURN_SERVER_HOST', 'turn.drop-wave.app');
+        $turnPort = env('TURN_SERVER_PORT', 3478);
+        $turnTlsPort = env('TURN_SERVER_TLS_PORT', 5349);
+        $turnSecret = env('TURN_SERVER_SECRET');
+
+        $iceServers = [
+            [
+                'urls' => [
+                    "stun:{$turnHost}:{$turnPort}",
+                    "stun:stun.l.google.com:19302",
+                    "stun:stun1.l.google.com:19302"
+                ]
+            ]
+        ];
+
+        if (!empty($turnSecret)) {
+            // Expire in 24 hours (86400 seconds)
+            $expiry = time() + 86400;
+            $user = $request->user();
+            $username = "{$expiry}:" . ($user ? $user->id : 'agent');
+
+            // Standard COTURN HMAC-SHA1 signature
+            $password = base64_encode(hash_hmac('sha1', $username, $turnSecret, true));
+
+            $iceServers[] = [
+                'urls' => [
+                    "turn:{$turnHost}:{$turnPort}?transport=udp",
+                    "turn:{$turnHost}:{$turnPort}?transport=tcp",
+                    "turns:{$turnHost}:{$turnTlsPort}?transport=tcp"
+                ],
+                'username' => $username,
+                'credential' => $password
+            ];
+        }
+
+        return response()->json([
+            'iceServers' => $iceServers
+        ]);
+    }
 }

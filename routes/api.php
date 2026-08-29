@@ -76,6 +76,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
 
 
     // Calling
+    Route::get('/webrtc/credentials', [CallController::class, 'getCredentials']);
     Route::get('/conversations/{id}/calls', [CallController::class, 'index']);
     Route::post('/conversations/{id}/call/initiate', [CallController::class, 'initiate']);
     Route::post('/conversations/{id}/call/accept', [CallController::class, 'accept']);

@@ -28,16 +28,30 @@ class TemplateController extends Controller
     {
         $user = $request->user();
 
-        if ($user && $user->isAdmin()) {
-            $templates = MessageTemplate::withoutGlobalScopes()
-                ->with(['channel', 'tenant:id,name'])
-                ->orderBy('created_at', 'desc')
-                ->get();
-        } else {
-            $templates = MessageTemplate::with('channel')
-                ->orderBy('created_at', 'desc')
-                ->get();
+        $query = ($user && $user->isAdmin())
+            ? MessageTemplate::withoutGlobalScopes()->with(['channel:id,display_name,phone_number,waba_id,is_primary,is_active', 'tenant:id,name'])
+            : MessageTemplate::with(['channel:id,display_name,phone_number,waba_id,is_primary,is_active']);
+
+        if ($request->filled('channel_id') && $request->channel_id !== 'ALL') {
+            $query->where('channel_id', $request->channel_id);
         }
+
+        if ($request->filled('conversation_id')) {
+            $conversation = \App\Models\Conversation::withoutGlobalScopes()->find($request->conversation_id);
+            if ($conversation && $conversation->channel_id) {
+                $query->where('channel_id', $conversation->channel_id);
+            }
+        }
+
+        if ($request->filled('status') && $request->status !== 'ALL') {
+            $query->where('status', strtoupper($request->status));
+        }
+
+        if ($request->filled('category') && $request->category !== 'ALL') {
+            $query->where('category', strtoupper($request->category));
+        }
+
+        $templates = $query->orderBy('created_at', 'desc')->get();
 
         return response()->json($templates);
     }
@@ -243,13 +257,25 @@ class TemplateController extends Controller
             $tenantId = $user->tenant_id;
         }
 
-        // Get primary channel for tenant
-        $channel = WabaChannel::withoutGlobalScopes()
+        // Get channels for tenant
+        $channelId = $request->input('channel_id') 
+            ?? $request->input('channelId') 
+            ?? $request->query('channel_id') 
+            ?? $request->query('channelId');
+
+        $channelsQuery = WabaChannel::withoutGlobalScopes()
             ->where('tenant_id', $tenantId)
             ->where('is_active', true)
-            ->first();
+            ->whereNotNull('access_token')
+            ->whereNotNull('waba_id');
 
-        if (!$channel || !$channel->decrypted_token || !$channel->waba_id) {
+        if ($channelId && $channelId !== 'ALL' && $channelId !== '') {
+            $channelsQuery->where('id', $channelId);
+        }
+
+        $channels = $channelsQuery->get();
+
+        if ($channels->isEmpty()) {
             return response()->json([
                 'error' => 'no_channel',
                 'message' => 'No active WhatsApp channel found to sync templates.'
@@ -257,11 +283,39 @@ class TemplateController extends Controller
         }
 
         try {
-            $syncedCount = $this->syncChannelTemplates($channel);
+            $syncedCount = 0;
+            $channelResults = [];
+            $errors = [];
+
+            foreach ($channels as $channel) {
+                try {
+                    $count = $this->syncChannelTemplates($channel);
+                    $syncedCount += $count;
+                    $channelResults[] = [
+                        'channel_id' => $channel->id,
+                        'channel_name' => $channel->display_name,
+                        'phone_number' => $channel->phone_number,
+                        'synced_count' => $count
+                    ];
+                } catch (Exception $e) {
+                    $errors[] = [
+                        'channel_id' => $channel->id,
+                        'channel_name' => $channel->display_name,
+                        'error' => $e->getMessage()
+                    ];
+                }
+            }
+
+            $channelCount = count($channels);
+            $msg = $channelCount === 1 
+                ? "Successfully synced {$syncedCount} templates for {$channels[0]->display_name}."
+                : "Successfully synced {$syncedCount} templates across {$channelCount} channels.";
 
             return response()->json([
-                'message' => "Successfully synced {$syncedCount} templates with Meta API.",
-                'synced_count' => $syncedCount
+                'message' => $msg,
+                'synced_count' => $syncedCount,
+                'channel_results' => $channelResults,
+                'errors' => $errors
             ]);
 
         } catch (Exception $e) {
@@ -317,6 +371,7 @@ class TemplateController extends Controller
             $lang = $metaTpl['language'];
 
             $tplData = [
+                'channel_id' => $channel->id,
                 'meta_template_id' => $metaTpl['id'] ?? null,
                 'status' => $status,
                 'category' => $metaTpl['category'] ?? 'UTILITY',
@@ -331,11 +386,25 @@ class TemplateController extends Controller
                 'approved_at' => $status === 'APPROVED' ? now() : null,
             ];
 
-            // Find local template by name
-            $localTpl = MessageTemplate::withoutGlobalScopes()
-                ->where('tenant_id', $channel->tenant_id)
-                ->where('name', $metaTpl['name'])
-                ->first();
+            // Find existing local template for this tenant
+            // 1. By meta_template_id if available, or
+            // 2. By channel_id + name + language
+            $localTpl = null;
+            if (!empty($metaTpl['id'])) {
+                $localTpl = MessageTemplate::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('meta_template_id', (string) $metaTpl['id'])
+                    ->first();
+            }
+
+            if (!$localTpl) {
+                $localTpl = MessageTemplate::withoutGlobalScopes()
+                    ->where('tenant_id', $channel->tenant_id)
+                    ->where('channel_id', $channel->id)
+                    ->where('name', $metaTpl['name'])
+                    ->where('language', $lang)
+                    ->first();
+            }
 
             if ($localTpl) {
                 $localTpl->update($tplData);

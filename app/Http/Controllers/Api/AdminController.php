@@ -1281,11 +1281,16 @@ class AdminController extends Controller
             return $response;
         }
 
-        $templates = \App\Models\MessageTemplate::withoutGlobalScopes()
+        $query = \App\Models\MessageTemplate::withoutGlobalScopes()
             ->where('tenant_id', $tenantId)
-            ->with('channel')
-            ->orderBy('created_at', 'desc')
-            ->get();
+            ->with(['channel:id,display_name,phone_number,phone_number_id,waba_id,is_primary,is_active']);
+
+        $channelId = $request->query('channel_id') ?? $request->input('channel_id');
+        if ($channelId && $channelId !== 'ALL') {
+            $query->where('channel_id', $channelId);
+        }
+
+        $templates = $query->orderBy('created_at', 'desc')->get();
 
         return response()->json($templates);
     }
@@ -1339,12 +1344,21 @@ class AdminController extends Controller
             return $response;
         }
 
-        $channel = WabaChannel::withoutGlobalScopes()
+        $channelId = $request->input('channel_id') ?? $request->query('channel_id');
+
+        $channelsQuery = WabaChannel::withoutGlobalScopes()
             ->where('tenant_id', $tenantId)
             ->where('is_active', true)
-            ->first();
+            ->whereNotNull('access_token')
+            ->whereNotNull('waba_id');
 
-        if (!$channel || !$channel->decrypted_token || !$channel->waba_id) {
+        if ($channelId && $channelId !== 'ALL' && $channelId !== '') {
+            $channelsQuery->where('id', $channelId);
+        }
+
+        $channels = $channelsQuery->get();
+
+        if ($channels->isEmpty()) {
             return response()->json([
                 'error' => 'no_channel',
                 'message' => 'No active WhatsApp channel found to sync templates.'
@@ -1353,72 +1367,121 @@ class AdminController extends Controller
 
         try {
             $metaService = resolve(\App\Services\MetaApiService::class);
-            $metaData = $metaService->fetchMessageTemplates(
-                $channel->decrypted_token,
-                $channel->waba_id
-            );
+            $totalSynced = 0;
+            $channelResults = [];
+            $errors = [];
 
-            $syncedCount = 0;
+            foreach ($channels as $channel) {
+                if (!$channel->decrypted_token || !$channel->waba_id) {
+                    continue;
+                }
 
-            foreach ($metaData['data'] ?? [] as $metaTpl) {
-                $bodyText = '';
-                $headerType = 'none';
-                $headerContent = null;
-                $footerText = null;
+                try {
+                    $metaData = $metaService->fetchMessageTemplates(
+                        $channel->decrypted_token,
+                        $channel->waba_id
+                    );
 
-                foreach ($metaTpl['components'] ?? [] as $comp) {
-                    if ($comp['type'] === 'BODY') {
-                        $bodyText = $comp['text'] ?? '';
-                    } elseif ($comp['type'] === 'HEADER') {
-                        $headerType = strtolower($comp['format'] ?? 'none');
-                        $headerContent = $comp['text'] ?? null;
-                    } elseif ($comp['type'] === 'FOOTER') {
-                        $footerText = $comp['text'] ?? null;
+                    $syncedCountForChannel = 0;
+
+                    foreach ($metaData['data'] ?? [] as $metaTpl) {
+                        $bodyText = '';
+                        $headerType = 'none';
+                        $headerContent = null;
+                        $footerText = null;
+
+                        foreach ($metaTpl['components'] ?? [] as $comp) {
+                            if ($comp['type'] === 'BODY') {
+                                $bodyText = $comp['text'] ?? '';
+                            } elseif ($comp['type'] === 'HEADER') {
+                                $headerType = strtolower($comp['format'] ?? 'none');
+                                $headerContent = $comp['text'] ?? null;
+                            } elseif ($comp['type'] === 'FOOTER') {
+                                $footerText = $comp['text'] ?? null;
+                            }
+                        }
+
+                        preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
+                        $variables = array_map('intval', array_unique($matches[1] ?? []));
+                        sort($variables);
+
+                        $status = strtoupper($metaTpl['status'] ?? 'PENDING');
+                        $lang = $metaTpl['language'];
+
+                        $tplData = [
+                            'channel_id' => $channel->id,
+                            'meta_template_id' => $metaTpl['id'] ?? null,
+                            'status' => $status,
+                            'category' => $metaTpl['category'] ?? 'UTILITY',
+                            'billing_cost' => \App\Models\MessageTemplate::defaultBillingCostForCategory($metaTpl['category'] ?? 'UTILITY'),
+                            'language' => $lang,
+                            'header_type' => $headerType,
+                            'header_content' => $headerContent,
+                            'body' => $bodyText,
+                            'footer' => $footerText,
+                            'variables' => $variables,
+                            'rejection_reason' => $metaTpl['rejected_reason'] ?? null,
+                            'approved_at' => $status === 'APPROVED' ? now() : null,
+                        ];
+
+                        // Find existing local template for this tenant
+                        // 1. By meta_template_id if available, or
+                        // 2. By channel_id + name + language
+                        $localTpl = null;
+                        if (!empty($metaTpl['id'])) {
+                            $localTpl = \App\Models\MessageTemplate::withoutGlobalScopes()
+                                ->where('tenant_id', $channel->tenant_id)
+                                ->where('meta_template_id', (string) $metaTpl['id'])
+                                ->first();
+                        }
+
+                        if (!$localTpl) {
+                            $localTpl = \App\Models\MessageTemplate::withoutGlobalScopes()
+                                ->where('tenant_id', $channel->tenant_id)
+                                ->where('channel_id', $channel->id)
+                                ->where('name', $metaTpl['name'])
+                                ->where('language', $lang)
+                                ->first();
+                        }
+
+                        if ($localTpl) {
+                            $localTpl->update($tplData);
+                        } else {
+                            \App\Models\MessageTemplate::create(array_merge($tplData, [
+                                'tenant_id' => $channel->tenant_id,
+                                'channel_id' => $channel->id,
+                                'name' => $metaTpl['name'],
+                            ]));
+                        }
+                        $syncedCountForChannel++;
                     }
-                }
 
-                preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
-                $variables = array_map('intval', array_unique($matches[1] ?? []));
-                sort($variables);
-
-                $status = strtoupper($metaTpl['status'] ?? 'PENDING');
-                $lang = $metaTpl['language'];
-
-                $tplData = [
-                    'meta_template_id' => $metaTpl['id'] ?? null,
-                    'status' => $status,
-                    'category' => $metaTpl['category'] ?? 'UTILITY',
-                    'billing_cost' => \App\Models\MessageTemplate::defaultBillingCostForCategory($metaTpl['category'] ?? 'UTILITY'),
-                    'language' => $lang,
-                    'header_type' => $headerType,
-                    'header_content' => $headerContent,
-                    'body' => $bodyText,
-                    'footer' => $footerText,
-                    'variables' => $variables,
-                    'rejection_reason' => $metaTpl['rejected_reason'] ?? null,
-                    'approved_at' => $status === 'APPROVED' ? now() : null,
-                ];
-
-                $localTpl = \App\Models\MessageTemplate::withoutGlobalScopes()
-                    ->where('tenant_id', $channel->tenant_id)
-                    ->where('name', $metaTpl['name'])
-                    ->first();
-
-                if ($localTpl) {
-                    $localTpl->update($tplData);
-                } else {
-                    \App\Models\MessageTemplate::create(array_merge($tplData, [
-                        'tenant_id' => $channel->tenant_id,
+                    $totalSynced += $syncedCountForChannel;
+                    $channelResults[] = [
                         'channel_id' => $channel->id,
-                        'name' => $metaTpl['name'],
-                    ]));
+                        'channel_name' => $channel->display_name,
+                        'phone_number' => $channel->phone_number,
+                        'synced_count' => $syncedCountForChannel
+                    ];
+                } catch (\Exception $e) {
+                    $errors[] = [
+                        'channel_id' => $channel->id,
+                        'channel_name' => $channel->display_name,
+                        'error' => $e->getMessage()
+                    ];
                 }
-                $syncedCount++;
             }
 
+            $channelCount = count($channels);
+            $msg = $channelCount === 1 
+                ? "Successfully synced {$totalSynced} templates for {$channels[0]->display_name}."
+                : "Successfully synced {$totalSynced} templates across {$channelCount} channels.";
+
             return response()->json([
-                'message' => "Successfully synced {$syncedCount} templates with Meta API.",
-                'synced_count' => $syncedCount
+                'message' => $msg,
+                'synced_count' => $totalSynced,
+                'channel_results' => $channelResults,
+                'errors' => $errors
             ]);
 
         } catch (\Exception $e) {

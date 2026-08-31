@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
-    container_name: dropwave-app
+    container_name: socialshub-app
     restart: unless-stopped
     ulimits:
       nofile:
@@ -19,11 +19,11 @@ services:
       - mysql
       - redis
     networks:
-      - dropwave-net
+      - socialshub-net
 
   nginx:
     image: nginx:alpine
-    container_name: dropwave-nginx
+    container_name: socialshub-nginx
     restart: unless-stopped
     ulimits:
       nofile:
@@ -37,15 +37,15 @@ services:
     depends_on:
       - app
     networks:
-      - dropwave-net
+      - socialshub-net
 
   mysql:
     image: mysql:8.0
-    container_name: dropwave-mysql
+    container_name: socialshub-mysql
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: ${DB_DATABASE:-dropwave}
-      MYSQL_USER: ${DB_USERNAME:-dropwave}
+      MYSQL_DATABASE: ${DB_DATABASE:-socialshub}
+      MYSQL_USER: ${DB_USERNAME:-socialshub}
       MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
     ports:
@@ -53,23 +53,23 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
-      - dropwave-net
+      - socialshub-net
 
   redis:
     image: redis:7-alpine
-    container_name: dropwave-redis
+    container_name: socialshub-redis
     restart: unless-stopped
     ports:
       - "63790:6379"
     volumes:
       - redis_data:/data
     networks:
-      - dropwave-net
+      - socialshub-net
 
 volumes:
   mysql_data:
   redis_data:
 
 networks:
-  dropwave-net:
+  socialshub-net:
     driver: bridge

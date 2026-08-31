@@ -343,7 +343,7 @@ class CallController extends Controller
      */
     public function getCredentials(Request $request)
     {
-        $turnHost = env('TURN_SERVER_HOST', 'turn.drop-wave.app');
+        $turnHost = env('TURN_SERVER_HOST', 'turn.socials-hub.com');
         $turnPort = env('TURN_SERVER_PORT', 3478);
         $turnTlsPort = env('TURN_SERVER_TLS_PORT', 5349);
         $turnSecret = env('TURN_SERVER_SECRET');

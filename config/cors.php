@@ -28,10 +28,10 @@ return [
         'http://127.0.0.1:5174',
         'http://127.0.0.1:5175',
         'http://127.0.0.1:5176',
-        'https://drop-wave.app',
-        'https://www.drop-wave.app',
-        'https://app.drop-wave.app',
-        'https://dashboard.drop-wave.app',
+        'https://socials-hub.com',
+        'https://www.socials-hub.com',
+        'https://app.socials-hub.com',
+        'https://dashboard.socials-hub.com',
     ],
 
     'allowed_origins_patterns' => [

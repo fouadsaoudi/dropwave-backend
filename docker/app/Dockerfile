@@ -1,7 +1,7 @@
 FROM php:8.4-fpm
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies with minimal footprint
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     libpng-dev \
@@ -10,13 +10,10 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     supervisor \
-    nginx \
     libzip-dev \
     procps \
-    ffmpeg
-
-# Clear cache
-RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+    ffmpeg \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install PHP extensions
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip

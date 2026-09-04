@@ -8,8 +8,6 @@ use App\Models\User;
 use App\Models\Role;
 use App\Models\WabaChannel;
 use App\Models\Contact;
-use App\Models\Conversation;
-use App\Models\Message;
 use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
@@ -62,8 +60,8 @@ class DatabaseSeeder extends Seeder
             'is_active' => true,
         ]);
 
-        // 5. Create a Mock WabaChannel for Click & Pick
-        $channel = WabaChannel::create([
+        // 5. Create Mock WabaChannels for Click & Pick
+        $primaryChannel = WabaChannel::create([
             'tenant_id' => $tenant->id,
             'display_name' => 'Click & Pick Support',
             'phone_number' => '+96171417539',
@@ -76,8 +74,7 @@ class DatabaseSeeder extends Seeder
             'connected_at' => now(),
         ]);
 
-        // 5. Create a Mock WabaChannel for Click & Pick
-        $channel = WabaChannel::create([
+        $secondChannel = WabaChannel::create([
             'tenant_id' => $tenant->id,
             'display_name' => 'Test Number',
             'phone_number' => '+15556780733',
@@ -86,7 +83,7 @@ class DatabaseSeeder extends Seeder
             'access_token' => 'EAAdh5YqDpdgBSWUD9LTopZBHX6CdzHbORiKMzKpAUJHzZB1ZCECcqZA3znCfivxH7LrnMEmA1gDgudRUuELZBSF3XbEqhwW1x8XBc1ZBDcTnE1OJQGfrswZB0FB15Ocaf6mNx2Xqsw7XZBZBoJhePY99dOb6t8ATQfTIYZAcHqGA1HaaLaUZBubNvFSmze9ywWB5QZDZD',
             'quality_rating' => '',
             'is_active' => true,
-            'is_primary' => true,
+            'is_primary' => false,
             'connected_at' => now(),
         ]);
 
@@ -96,60 +93,6 @@ class DatabaseSeeder extends Seeder
             'name' => 'John Doe',
             'phone_number' => '+96176681709',
             'added_via' => 'inbound',
-        ]);
-
-        // 7. Create Mock Conversation (Active & claimed by agent)
-        $conversation = Conversation::create([
-            'tenant_id' => $tenant->id,
-            'contact_id' => $contact->id,
-            'channel_id' => $channel->id,
-            'status' => 'open',
-            'assigned_to' => $agent->id,
-            'assigned_at' => now()->subHours(2),
-            'window_expires_at' => now()->addHours(22), // 24h window active
-            'last_message_at' => now()->subMinutes(15),
-            'last_message_body' => 'I would like to change the delivery address for order #4102',
-            'unread_count' => 0,
-        ]);
-
-        // 8. Seed conversation messages
-        Message::create([
-            'tenant_id' => $tenant->id,
-            'conversation_id' => $conversation->id,
-            'direction' => 'inbound',
-            'type' => 'text',
-            'body' => 'Hello, I want to inquire about my order.',
-            'whatsapp_msg_id' => 'wamid.HBgLOTYxNzAxMjM0NTYSFQIAERgSQjE2ODU1RjlEMUI5OEY5QUQA',
-            'status' => 'read',
-            'sent_at' => now()->subHours(2),
-            'delivered_at' => now()->subHours(2)->addSeconds(2),
-            'read_at' => now()->subHours(2)->addSeconds(10),
-        ]);
-
-        Message::create([
-            'tenant_id' => $tenant->id,
-            'conversation_id' => $conversation->id,
-            'direction' => 'outbound',
-            'type' => 'text',
-            'body' => 'Hi John! Sure, please share your order number.',
-            'whatsapp_msg_id' => 'wamid.HBgLOTYxNzAxMjM0NTYSFQIAERgSQjE2ODU1RjlEMUI5OEY5QURC',
-            'status' => 'read',
-            'sent_by' => $agent->id,
-            'sent_at' => now()->subHour(),
-            'delivered_at' => now()->subHour()->addSeconds(3),
-            'read_at' => now()->subHour()->addSeconds(30),
-        ]);
-
-        Message::create([
-            'tenant_id' => $tenant->id,
-            'conversation_id' => $conversation->id,
-            'direction' => 'inbound',
-            'type' => 'text',
-            'body' => 'I would like to change the delivery address for order #4102',
-            'whatsapp_msg_id' => 'wamid.HBgLOTYxNzAxMjM0NTYSFQIAERgSQjE2ODU1RjlEMUI5OEY5QURD',
-            'status' => 'delivered',
-            'sent_at' => now()->subMinutes(15),
-            'delivered_at' => now()->subMinutes(15)->addSeconds(2),
         ]);
     }
 }

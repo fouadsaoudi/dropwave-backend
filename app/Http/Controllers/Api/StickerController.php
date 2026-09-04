@@ -27,7 +27,7 @@ class StickerController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'file' => 'required|file|mimes:webp|max:2048', // Allow up to 2 MB (WhatsApp stickers are ideally <= 500 KB, but animated stickers can reach 1-2 MB)
+            'file' => 'required|file|mimes:webp|max:512', // Max 500 KB (WhatsApp animated/static sticker limits)
             'name' => 'nullable|string|max:255',
             'category' => 'nullable|string|max:255',
         ]);

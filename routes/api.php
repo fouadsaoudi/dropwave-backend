@@ -17,8 +17,8 @@ Route::get('/health', function () {
 });
 
 // Meta Webhooks
-Route::get('/webhooks/meta', [WebhookController::class, 'verify']);
-Route::post('/webhooks/meta', [WebhookController::class, 'receive'])->middleware('meta.webhook.signature');
+Route::get('/webhooks/meta/{app_id?}', [WebhookController::class, 'verify']);
+Route::post('/webhooks/meta/{app_id?}', [WebhookController::class, 'receive'])->middleware('meta.webhook.signature');
 
 Route::get('/media/proxy', [\App\Http\Controllers\Api\MediaController::class, 'proxy']);
 
@@ -151,6 +151,9 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/admin/users', [AdminController::class, 'storeUser']);
     Route::put('/admin/users/{id}', [AdminController::class, 'updateUser']);
     Route::delete('/admin/users/{id}', [AdminController::class, 'deleteUser']);
+    Route::get('/admin/meta-apps', [AdminController::class, 'listMetaApps']);
+    Route::get('/admin/tenants/{tenantId}/meta-apps', [AdminController::class, 'listTenantMetaApps']);
+    Route::post('/admin/meta-apps', [AdminController::class, 'storeMetaApp']);
 
     // Admin Tenant Contact Categories
     Route::get('/admin/tenants/{tenantId}/contact-categories', [AdminController::class, 'listTenantContactCategories']);

@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\MessageTemplate;
 use App\Models\Tenant;
 use App\Models\WabaChannel;
+use App\Models\MetaApp;
 use App\Models\TenantBillingSnapshot;
 use App\Models\TenantAiUsage;
 use App\Models\User;
@@ -266,7 +267,7 @@ class AdminController extends Controller
             ], 404);
         }
 
-        $channels = WabaChannel::where('tenant_id', $tenantId)->get();
+        $channels = WabaChannel::where('tenant_id', $tenantId)->with('metaApp:id,name,app_id')->get();
 
         return response()->json([
             'tenant' => [
@@ -321,10 +322,12 @@ class AdminController extends Controller
         $billing = $billingService->getMonthlySnapshotSummary($tenant, Carbon::now());
         $channels = WabaChannel::query()
             ->where('tenant_id', $tenant->id)
+            ->with('metaApp:id,name,app_id')
             ->orderByDesc('is_primary')
             ->orderBy('id')
             ->get([
                 'id',
+                'meta_app_id',
                 'display_name',
                 'phone_number',
                 'phone_number_id',
@@ -355,6 +358,7 @@ class AdminController extends Controller
             'current_expenses' => $billing['total_estimated_cost'],
             'meta_expenses' => $billing['meta_total_estimated_cost'] ?? '0.0000',
             'channels' => $channels,
+            'meta_apps' => $tenant->metaApps()->get(['id', 'name', 'app_id', 'is_active', 'created_at']),
             'billing' => array_merge($billing, ['currency' => 'USD']),
             'ai_usage' => TenantAiUsage::getTenantSummary($tenant->id),
         ]);
@@ -458,6 +462,9 @@ class AdminController extends Controller
             'email' => 'required|email|unique:tenants,email|max:255',
             'phone' => 'nullable|string|max:50',
             'type' => 'nullable|string|in:large_messaging_limit,delivery_coordination',
+            'meta_app_id' => 'nullable|string|max:100',
+            'meta_app_secret' => 'nullable|string|max:255',
+            'meta_app_name' => 'nullable|string|max:255',
         ]);
 
         $tenant = Tenant::create([
@@ -470,9 +477,36 @@ class AdminController extends Controller
             'is_active' => true,
         ]);
 
+        if ($request->filled('meta_app_id')) {
+            $inputAppId = trim($request->meta_app_id);
+            $appSecret = trim($request->meta_app_secret ?? '');
+            
+            $existingApp = is_numeric($inputAppId) ? MetaApp::find($inputAppId) : null;
+            if (!$existingApp) {
+                $existingApp = MetaApp::findByAppId($inputAppId);
+            }
+
+            if ($existingApp) {
+                $existingApp->tenant_id = $tenant->id;
+                if (!empty($appSecret)) {
+                    $existingApp->app_secret = $appSecret;
+                }
+                $existingApp->save();
+            } elseif (!empty($appSecret)) {
+                MetaApp::create([
+                    'tenant_id' => $tenant->id,
+                    'name' => $request->meta_app_name ?: ($tenant->name . ' Meta App'),
+                    'app_id' => $inputAppId,
+                    'app_secret' => $appSecret,
+                    'verify_token' => config('services.meta.verify_token') ?: 'dropwave_local_secure_token',
+                    'is_active' => true,
+                ]);
+            }
+        }
+
         return response()->json([
             'message' => 'Tenant workspace created successfully.',
-            'tenant' => $tenant
+            'tenant' => $tenant->load('metaApps:id,name,app_id')
         ], 201);
     }
 
@@ -502,6 +536,9 @@ class AdminController extends Controller
             'phone' => 'nullable|string|max:50',
             'type' => 'nullable|string|in:large_messaging_limit,delivery_coordination',
             'is_active' => 'required|boolean',
+            'meta_app_id' => 'nullable|string|max:100',
+            'meta_app_secret' => 'nullable|string|max:255',
+            'meta_app_name' => 'nullable|string|max:255',
         ]);
 
         $tenant->update([
@@ -514,9 +551,36 @@ class AdminController extends Controller
             'is_active' => $request->is_active,
         ]);
 
+        if ($request->filled('meta_app_id')) {
+            $inputAppId = trim($request->meta_app_id);
+            $appSecret = trim($request->meta_app_secret ?? '');
+
+            $existingApp = is_numeric($inputAppId) ? MetaApp::find($inputAppId) : null;
+            if (!$existingApp) {
+                $existingApp = MetaApp::findByAppId($inputAppId);
+            }
+
+            if ($existingApp) {
+                $existingApp->tenant_id = $tenant->id;
+                if (!empty($appSecret)) {
+                    $existingApp->app_secret = $appSecret;
+                }
+                $existingApp->save();
+            } elseif (!empty($appSecret)) {
+                MetaApp::create([
+                    'tenant_id' => $tenant->id,
+                    'name' => $request->meta_app_name ?: ($tenant->name . ' Meta App'),
+                    'app_id' => $inputAppId,
+                    'app_secret' => $appSecret,
+                    'verify_token' => config('services.meta.verify_token') ?: 'dropwave_local_secure_token',
+                    'is_active' => true,
+                ]);
+            }
+        }
+
         return response()->json([
             'message' => 'Tenant workspace updated successfully.',
-            'tenant' => $tenant
+            'tenant' => $tenant->load('metaApps:id,name,app_id')
         ]);
     }
 
@@ -679,6 +743,9 @@ class AdminController extends Controller
             'access_token' => 'required|string',
             'is_active' => 'required|boolean',
             'is_primary' => 'required|boolean',
+            'meta_app_id' => 'nullable|string|max:100',
+            'meta_app_secret' => 'nullable|string|max:255',
+            'meta_app_name' => 'nullable|string|max:255',
         ]);
 
         $metaService = resolve(\App\Services\MetaApiService::class);
@@ -713,8 +780,38 @@ class AdminController extends Controller
                 ->update(['is_primary' => false]);
         }
 
+        $metaAppRecordId = null;
+        if ($request->filled('meta_app_id')) {
+            $inputAppId = trim($request->meta_app_id);
+            $appSecret = trim($request->meta_app_secret ?? '');
+
+            $existingApp = is_numeric($inputAppId) ? MetaApp::find($inputAppId) : null;
+            if (!$existingApp) {
+                $existingApp = MetaApp::findByAppId($inputAppId);
+            }
+
+            if ($existingApp) {
+                if (!empty($appSecret)) {
+                    $existingApp->app_secret = $appSecret;
+                    $existingApp->save();
+                }
+                $metaAppRecordId = $existingApp->id;
+            } elseif (!empty($appSecret)) {
+                $newApp = MetaApp::create([
+                    'tenant_id' => $tenantId,
+                    'name' => $request->meta_app_name ?: ($request->display_name . ' Meta App'),
+                    'app_id' => $inputAppId,
+                    'app_secret' => $appSecret,
+                    'verify_token' => config('services.meta.verify_token') ?: 'dropwave_local_secure_token',
+                    'is_active' => true,
+                ]);
+                $metaAppRecordId = $newApp->id;
+            }
+        }
+
         $channel = WabaChannel::create([
             'tenant_id' => $tenantId,
+            'meta_app_id' => $metaAppRecordId,
             'display_name' => $request->display_name,
             'phone_number' => $request->phone_number,
             'phone_number_id' => $request->phone_number_id,
@@ -729,7 +826,7 @@ class AdminController extends Controller
 
         return response()->json([
             'message' => 'WABA channel added successfully.',
-            'channel' => $channel
+            'channel' => $channel->load('metaApp:id,name,app_id')
         ], 201);
     }
 
@@ -758,6 +855,9 @@ class AdminController extends Controller
             'access_token' => 'nullable|string',
             'is_active' => 'required|boolean',
             'is_primary' => 'required|boolean',
+            'meta_app_id' => 'nullable|string|max:100',
+            'meta_app_secret' => 'nullable|string|max:255',
+            'meta_app_name' => 'nullable|string|max:255',
         ]);
 
         $tokenToUse = !empty($request->access_token) ? $request->access_token : $channel->decrypted_token;
@@ -808,11 +908,43 @@ class AdminController extends Controller
             $updateData['access_token'] = $request->access_token;
         }
 
+        if ($request->has('meta_app_id')) {
+            if ($request->filled('meta_app_id')) {
+                $inputAppId = trim($request->meta_app_id);
+                $appSecret = trim($request->meta_app_secret ?? '');
+
+                $existingApp = is_numeric($inputAppId) ? MetaApp::find($inputAppId) : null;
+                if (!$existingApp) {
+                    $existingApp = MetaApp::findByAppId($inputAppId);
+                }
+
+                if ($existingApp) {
+                    if (!empty($appSecret)) {
+                        $existingApp->app_secret = $appSecret;
+                        $existingApp->save();
+                    }
+                    $updateData['meta_app_id'] = $existingApp->id;
+                } elseif (!empty($appSecret)) {
+                    $newApp = MetaApp::create([
+                        'tenant_id' => $channel->tenant_id,
+                        'name' => $request->meta_app_name ?: ($request->display_name . ' Meta App'),
+                        'app_id' => $inputAppId,
+                        'app_secret' => $appSecret,
+                        'verify_token' => config('services.meta.verify_token') ?: 'dropwave_local_secure_token',
+                        'is_active' => true,
+                    ]);
+                    $updateData['meta_app_id'] = $newApp->id;
+                }
+            } else {
+                $updateData['meta_app_id'] = null;
+            }
+        }
+
         $channel->update($updateData);
 
         return response()->json([
             'message' => 'WABA channel updated successfully.',
-            'channel' => $channel
+            'channel' => $channel->load('metaApp:id,name,app_id')
         ]);
     }
 
@@ -838,6 +970,78 @@ class AdminController extends Controller
         return response()->json([
             'message' => 'WABA channel deleted successfully.'
         ]);
+    }
+
+    /**
+     * List all registered Meta Apps (Admin only).
+     */
+    public function listMetaApps(Request $request)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $apps = MetaApp::where('is_active', true)
+            ->with('tenant:id,name')
+            ->get(['id', 'tenant_id', 'name', 'app_id', 'is_active', 'created_at']);
+
+        return response()->json($apps);
+    }
+
+    /**
+     * List Meta Apps for a specific tenant (Admin only).
+     */
+    public function listTenantMetaApps(Request $request, $tenantId)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $apps = MetaApp::where(function ($q) use ($tenantId) {
+            $q->where('tenant_id', $tenantId)
+              ->orWhereNull('tenant_id');
+        })
+        ->where('is_active', true)
+        ->get(['id', 'tenant_id', 'name', 'app_id', 'is_active', 'created_at']);
+
+        return response()->json($apps);
+    }
+
+    /**
+     * Store/Register a new Meta App (Admin only).
+     */
+    public function storeMetaApp(Request $request)
+    {
+        if ($response = $this->requireAdmin($request)) {
+            return $response;
+        }
+
+        $request->validate([
+            'name' => 'nullable|string|max:255',
+            'app_id' => 'required|string|max:100|unique:meta_apps,app_id',
+            'app_secret' => 'required|string|max:255',
+            'tenant_id' => 'nullable|exists:tenants,id',
+            'verify_token' => 'nullable|string|max:255',
+        ]);
+
+        $app = MetaApp::create([
+            'name' => $request->name ?: 'Meta App ' . $request->app_id,
+            'app_id' => trim($request->app_id),
+            'app_secret' => trim($request->app_secret),
+            'tenant_id' => $request->tenant_id,
+            'verify_token' => $request->verify_token ?: (config('services.meta.verify_token') ?: 'dropwave_local_secure_token'),
+            'is_active' => true,
+        ]);
+
+        return response()->json([
+            'message' => 'Meta App registered successfully.',
+            'meta_app' => [
+                'id' => $app->id,
+                'name' => $app->name,
+                'app_id' => $app->app_id,
+                'tenant_id' => $app->tenant_id,
+            ]
+        ], 201);
     }
 
     /**

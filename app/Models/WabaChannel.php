@@ -12,6 +12,7 @@ class WabaChannel extends Model
     use BelongsToTenant;
     protected $fillable = [
         'tenant_id',
+        'meta_app_id',
         'display_name',
         'phone_number',
         'phone_number_id',
@@ -55,6 +56,11 @@ class WabaChannel extends Model
     public function tenant(): BelongsTo
     {
         return $this->belongsTo(Tenant::class);
+    }
+
+    public function metaApp(): BelongsTo
+    {
+        return $this->belongsTo(MetaApp::class, 'meta_app_id');
     }
 
     public function conversations(): HasMany

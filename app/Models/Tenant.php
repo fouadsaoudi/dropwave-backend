@@ -37,6 +37,11 @@ class Tenant extends Model
         return $this->hasMany(WabaChannel::class);
     }
 
+    public function metaApps(): HasMany
+    {
+        return $this->hasMany(MetaApp::class);
+    }
+
     public function contacts(): HasMany
     {
         return $this->hasMany(Contact::class);

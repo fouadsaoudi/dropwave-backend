@@ -17,7 +17,14 @@ return Application::configure(basePath: dirname(__DIR__))
         ['prefix' => 'api', 'middleware' => ['api', 'auth:sanctum']]
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->trustProxies(at: '*');
         $middleware->statefulApi();
+        $middleware->validateCsrfTokens(except: [
+            'api/auth/login',
+            'api/auth/logout',
+            'api/broadcasting/auth',
+            'api/webhooks/*',
+        ]);
         $middleware->alias([
             'tenant' => \App\Http\Middleware\EnsureTenantScope::class,
             'meta.webhook.signature' => \App\Http\Middleware\VerifyMetaWebhookSignature::class,

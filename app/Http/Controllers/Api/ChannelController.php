@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use App\Services\MetaApiService;
 use App\Services\WhatsAppErrorService;
 use App\Models\WabaChannel;
+use App\Models\MetaApp;
 use Exception;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -124,16 +125,62 @@ class ChannelController extends Controller
             'phone_number_id' => 'required|string|max:255',
             'waba_id' => 'required|string|max:255',
             'access_token' => 'required|string',
+            'meta_app_id' => 'nullable|string|max:100',
+            'meta_app_secret' => 'nullable|string|max:255',
+            'meta_app_name' => 'nullable|string|max:255',
         ]);
 
         $tenantId = $request->get('tenant_id');
 
         try {
+            $metaAppRecordId = null;
+            if ($request->filled('meta_app_id')) {
+                $inputAppId = trim($request->meta_app_id);
+                $appSecret = trim($request->meta_app_secret ?? '');
+
+                $existingApp = is_numeric($inputAppId) ? MetaApp::find($inputAppId) : null;
+                if (!$existingApp) {
+                    $existingApp = MetaApp::findByAppId($inputAppId);
+                }
+
+                if ($existingApp) {
+                    if (!empty($appSecret)) {
+                        $existingApp->app_secret = $appSecret;
+                        $existingApp->save();
+                    }
+                    $metaAppRecordId = $existingApp->id;
+                } elseif (!empty($appSecret)) {
+                    $newApp = MetaApp::create([
+                        'tenant_id' => $tenantId,
+                        'name' => $request->meta_app_name ?: ($request->display_name . ' Meta App'),
+                        'app_id' => $inputAppId,
+                        'app_secret' => $appSecret,
+                        'verify_token' => config('services.meta.verify_token') ?: 'dropwave_local_secure_token',
+                        'is_active' => true,
+                    ]);
+                    $metaAppRecordId = $newApp->id;
+                }
+            }
+
             // Auto-subscribe the Meta App to WABA webhook notifications
             try {
                 $this->metaService->subscribeAppToWaba($request->waba_id, $request->access_token);
             } catch (Exception $e) {
                 Log::warning("Failed to auto-subscribe to WABA {$request->waba_id} webhooks during manual setup: " . $e->getMessage());
+            }
+
+            $updateData = [
+                'display_name' => $request->display_name,
+                'phone_number' => $request->phone_number,
+                'waba_id' => $request->waba_id,
+                'access_token' => $request->access_token, // Mutator encrypts this automatically
+                'quality_rating' => 'GREEN',
+                'is_active' => true,
+                'connected_at' => now(),
+            ];
+
+            if ($metaAppRecordId) {
+                $updateData['meta_app_id'] = $metaAppRecordId;
             }
 
             // Create or update the channel for the current tenant
@@ -142,15 +189,7 @@ class ChannelController extends Controller
                     'tenant_id' => $tenantId,
                     'phone_number_id' => $request->phone_number_id,
                 ],
-                [
-                    'display_name' => $request->display_name,
-                    'phone_number' => $request->phone_number,
-                    'waba_id' => $request->waba_id,
-                    'access_token' => $request->access_token, // Mutator encrypts this automatically
-                    'quality_rating' => 'GREEN',
-                    'is_active' => true,
-                    'connected_at' => now(),
-                ]
+                $updateData
             );
 
             return response()->json([
@@ -160,6 +199,7 @@ class ChannelController extends Controller
                     'display_name' => $channel->display_name,
                     'phone_number' => $channel->phone_number,
                     'quality_rating' => $channel->quality_rating,
+                    'meta_app_id' => $channel->meta_app_id,
                 ]
             ]);
 

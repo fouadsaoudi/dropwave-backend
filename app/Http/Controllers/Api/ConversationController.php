@@ -458,7 +458,7 @@ class ConversationController extends Controller
                 $extension = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'bin');
 
                 // Determine message media type
-                if (($mediaMimeType === 'image/webp' || $extension === 'webp') && $file->getSize() <= 512000) {
+                if (($mediaMimeType === 'image/webp' || $extension === 'webp') && $file->getSize() <= 2097152) {
                     $msgType = 'sticker';
                 } elseif (str_starts_with($mediaMimeType, 'image/') && $mediaMimeType !== 'image/svg+xml') {
                     $msgType = 'image';
@@ -563,13 +563,28 @@ class ConversationController extends Controller
                             $contextWhatsappMsgId
                         );
                     } elseif ($msgType === 'sticker') {
-                        $metaResponse = $this->metaService->sendStickerMessage(
-                            $channel->decrypted_token,
-                            $channel->phone_number_id,
-                            $contact->phone_number,
-                            $metaMediaId,
-                            $contextWhatsappMsgId
-                        );
+                        try {
+                            $metaResponse = $this->metaService->sendStickerMessage(
+                                $channel->decrypted_token,
+                                $channel->phone_number_id,
+                                $contact->phone_number,
+                                $metaMediaId,
+                                $contextWhatsappMsgId
+                            );
+                        } catch (\Throwable $e) {
+                            // If Meta rejects sending as native sticker (e.g. animated sticker strictly exceeds Meta 500 KB limit),
+                            // gracefully fallback to sending as an image message so delivery does not fail
+                            \Illuminate\Support\Facades\Log::warning("Sticker sending failed via Meta, falling back to image message: " . $e->getMessage());
+                            $metaResponse = $this->metaService->sendImageMessage(
+                                $channel->decrypted_token,
+                                $channel->phone_number_id,
+                                $contact->phone_number,
+                                $metaMediaId,
+                                $request->body,
+                                $contextWhatsappMsgId
+                            );
+                            $msgType = 'image';
+                        }
                     } elseif ($msgType === 'video') {
                         $metaResponse = $this->metaService->sendVideoMessage(
                             $channel->decrypted_token,
